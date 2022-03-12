@@ -1,0 +1,31 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.1.32228.430
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "TS-SE_Plugin", "TS-SE_Plugin\TS-SE_Plugin.csproj", "{AA7045FC-9487-4E17-9225-3A843C6F9E98}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SE-TS_Plugin", "SE-TS_Plugin\SE-TS_Plugin.csproj", "{1D3FBAE5-B332-4BAF-B9E3-6EDD3F20900B}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{AA7045FC-9487-4E17-9225-3A843C6F9E98}.Debug|x64.ActiveCfg = Debug|x64
+		{AA7045FC-9487-4E17-9225-3A843C6F9E98}.Debug|x64.Build.0 = Debug|x64
+		{AA7045FC-9487-4E17-9225-3A843C6F9E98}.Release|x64.ActiveCfg = Release|x64
+		{AA7045FC-9487-4E17-9225-3A843C6F9E98}.Release|x64.Build.0 = Release|x64
+		{1D3FBAE5-B332-4BAF-B9E3-6EDD3F20900B}.Debug|x64.ActiveCfg = Debug|x64
+		{1D3FBAE5-B332-4BAF-B9E3-6EDD3F20900B}.Debug|x64.Build.0 = Debug|x64
+		{1D3FBAE5-B332-4BAF-B9E3-6EDD3F20900B}.Release|x64.ActiveCfg = Release|x64
+		{1D3FBAE5-B332-4BAF-B9E3-6EDD3F20900B}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {1D5EAA20-E447-4887-9930-91C452E2BE53}
+	EndGlobalSection
+EndGlobal
