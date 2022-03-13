@@ -110,7 +110,7 @@ public static class Plugin
         if (cancellationToken.IsCancellationRequested)
             return;
 
-        SendMessageToClient(localClientId, "TSSE Plugin - Established connection to Space Engineers plugin.");
+        SendMessageToClient(localClientId, "TS-SE Plugin - Established connection to Space Engineers plugin.");
 
         while (pipeStream.IsConnected && !cancellationToken.IsCancellationRequested)
         {

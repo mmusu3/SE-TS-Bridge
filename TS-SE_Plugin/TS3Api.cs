@@ -7,290 +7,295 @@ using anyID = System.UInt16;
 /// <summary> Functions exported to plugin from main binary</summary>
 public unsafe struct TS3Functions
 {
-    public delegate*<byte** /*result*/, uint> getClientLibVersion;
-    public delegate*<ulong* /*result*/, uint> getClientLibVersionNumber;
-    public delegate*<int /*port*/, ulong* /*result*/, uint> spawnNewServerConnectionHandler;
-    public delegate*<ulong /*serverConnectionHandlerID*/, uint> destroyServerConnectionHandler;
+    // NOTE: fixed buffers don't support pointer sized types. So this is only valid in x64 mode.
+    fixed ulong pointers[226];
+
+#pragma warning disable IDE1006 // Naming Styles
+    public uint getClientLibVersion(byte** result) => ((delegate*<byte**, uint>)pointers[0])(result);
+    public uint getClientLibVersionNumber(ulong* result) => ((delegate*<ulong*, uint>)pointers[1])(result);
+    public uint spawnNewServerConnectionHandler(int port, ulong* result) => ((delegate*<int, ulong*, uint>)pointers[2])(port, result);
+    public uint destroyServerConnectionHandler(ulong serverConnectionHandlerID) => ((delegate*<ulong, uint>)pointers[3])(serverConnectionHandlerID);
 
     /* Error handling */
-    public delegate*<uint /*errorCode*/, byte** /*error*/, uint> getErrorMessage;
+    public uint getErrorMessage(uint errorCode, byte** error) => ((delegate*<uint, byte**, uint>)pointers[4])(errorCode, error);
 
     /* Memory management */
-    public delegate*<void* /*pointer*/, uint> freeMemory;
+    public uint freeMemory(void* pointer) => ((delegate*<void*, uint>)pointers[5])(pointer);
 
     /* Logging */
-    public delegate*</*const */byte* /*logMessage*/, LogLevel /*severity*/, /*const */byte* /*channel*/, ulong /*logID*/, uint> logMessage;
+    public uint logMessage(/*const */byte* logMessage, LogLevel severity, /*const */byte* channel, ulong logID) => ((delegate*</*const */byte*, LogLevel, /*const */byte*, ulong, uint>)pointers[6])(logMessage, severity, channel, logID);
 
     /* Sound */
-    public delegate*</*const */byte* /*modeID*/, byte**** /*result*/, uint> getPlaybackDeviceList;
-    public delegate*<byte*** /*result*/, uint> getPlaybackModeList;
-    public delegate*</*const */byte* /*modeID*/, byte**** /*result*/, uint> getCaptureDeviceList;
-    public delegate*<byte*** /*result*/, uint> getCaptureModeList;
-    public delegate*</*const */byte* /*modeID*/, byte*** /*result*/, uint> getDefaultPlaybackDevice;
-    public delegate*<byte** /*result*/, uint> getDefaultPlayBackMode;
-    public delegate*</*const */byte* /*modeID*/, byte*** /*result*/, uint> getDefaultCaptureDevice;
-    public delegate*<byte** /*result*/, uint> getDefaultCaptureMode;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*modeID*/, /*const */byte* /*playbackDevice*/, uint> openPlaybackDevice;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*modeID*/, /*const */byte* /*captureDevice*/, uint> openCaptureDevice;
-    public delegate*<ulong /*serverConnectionHandlerID*/, byte** /*result*/, int* /*isDefault*/, uint> getCurrentPlaybackDeviceName;
-    public delegate*<ulong /*serverConnectionHandlerID*/, byte** /*result*/, uint> getCurrentPlayBackMode;
-    public delegate*<ulong /*serverConnectionHandlerID*/, byte** /*result*/, int* /*isDefault*/, uint> getCurrentCaptureDeviceName;
-    public delegate*<ulong /*serverConnectionHandlerID*/, byte** /*result*/, uint> getCurrentCaptureMode;
-    public delegate*<ulong /*serverConnectionHandlerID*/, uint> initiateGracefulPlaybackShutdown;
-    public delegate*<ulong /*serverConnectionHandlerID*/, uint> closePlaybackDevice;
-    public delegate*<ulong /*serverConnectionHandlerID*/, uint> closeCaptureDevice;
-    public delegate*<ulong /*serverConnectionHandlerID*/, uint> activateCaptureDevice;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*path*/, int /*loop*/, ulong* /*waveHandle*/, uint> playWaveFileHandle;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*waveHandle*/, int /*pause*/, uint> pauseWaveFileHandle;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*waveHandle*/, uint> closeWaveFileHandle;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*path*/, uint> playWaveFile;
-    public delegate*</*const */byte* /*deviceID*/, /*const */byte* /*deviceDisplayName*/, int /*capFrequency*/, int /*capChannels*/, int /*playFrequency*/, int /*playChannels*/, uint> registerCustomDevice;
-    public delegate*</*const */byte* /*deviceID*/, uint> unregisterCustomDevice;
-    public delegate*</*const */byte* /*deviceName*/, /*const*/ short* /*buffer*/, int /*samples*/, uint> processCustomCaptureData;
-    public delegate*</*const */byte* /*deviceName*/, short* /*buffer*/, int /*samples*/, uint> acquireCustomPlaybackData;
+    public uint getPlaybackDeviceList(/*const */byte* modeID, byte**** result) => ((delegate*</*const */byte*, byte****, uint>)pointers[7])(modeID, result);
+    public uint getPlaybackModeList(byte*** result) => ((delegate*<byte***, uint>)pointers[8])(result);
+    public uint getCaptureDeviceList(/*const */byte* modeID, byte**** result) => ((delegate*</*const */byte*, byte****, uint>)pointers[9])(modeID, result);
+    public uint getCaptureModeList(byte*** result) => ((delegate*<byte***, uint>)pointers[10])(result);
+    public uint getDefaultPlaybackDevice(/*const */byte* modeID, byte*** result) => ((delegate*</*const */byte*, byte***, uint>)pointers[11])(modeID, result);
+    public uint getDefaultPlayBackMode(byte** result) => ((delegate*<byte**, uint>)pointers[12])(result);
+    public uint getDefaultCaptureDevice(/*const */byte* modeID, byte*** result) => ((delegate*</*const */byte*, byte***, uint>)pointers[13])(modeID, result);
+    public uint getDefaultCaptureMode(byte** result) => ((delegate*<byte**, uint>)pointers[14])(result);
+    public uint openPlaybackDevice(ulong serverConnectionHandlerID, /*const */byte* modeID, /*const */byte* playbackDevice) => ((delegate*<ulong, /*const */byte*, /*const */byte*, uint>)pointers[15])(serverConnectionHandlerID, modeID, playbackDevice);
+    public uint openCaptureDevice(ulong serverConnectionHandlerID, /*const */byte* modeID, /*const */byte* captureDevice) => ((delegate*<ulong, /*const */byte*, /*const */byte*, uint>)pointers[16])(serverConnectionHandlerID, modeID, captureDevice);
+    public uint getCurrentPlaybackDeviceName(ulong serverConnectionHandlerID, byte** result, int* isDefault) => ((delegate*<ulong, byte**, int*, uint>)pointers[17])(serverConnectionHandlerID, result, isDefault);
+    public uint getCurrentPlayBackMode(ulong serverConnectionHandlerID, byte** result) => ((delegate*<ulong, byte**, uint>)pointers[18])(serverConnectionHandlerID, result);
+    public uint getCurrentCaptureDeviceName(ulong serverConnectionHandlerID, byte** result, int* isDefault) => ((delegate*<ulong, byte**, int*, uint>)pointers[19])(serverConnectionHandlerID, result, isDefault);
+    public uint getCurrentCaptureMode(ulong serverConnectionHandlerID, byte** result) => ((delegate*<ulong, byte**, uint>)pointers[20])(serverConnectionHandlerID, result);
+    public uint initiateGracefulPlaybackShutdown(ulong serverConnectionHandlerID) => ((delegate*<ulong, uint>)pointers[21])(serverConnectionHandlerID);
+    public uint closePlaybackDevice(ulong serverConnectionHandlerID) => ((delegate*<ulong, uint>)pointers[22])(serverConnectionHandlerID);
+    public uint closeCaptureDevice(ulong serverConnectionHandlerID) => ((delegate*<ulong, uint>)pointers[23])(serverConnectionHandlerID);
+    public uint activateCaptureDevice(ulong serverConnectionHandlerID) => ((delegate*<ulong, uint>)pointers[24])(serverConnectionHandlerID);
+    public uint playWaveFileHandle(ulong serverConnectionHandlerID, /*const */byte* path, int loop, ulong* waveHandle) => ((delegate*<ulong, /*const */byte*, int, ulong*, uint>)pointers[25])(serverConnectionHandlerID, path, loop, waveHandle);
+    public uint pauseWaveFileHandle(ulong serverConnectionHandlerID, ulong waveHandle, int pause) => ((delegate*<ulong, ulong, int, uint>)pointers[26])(serverConnectionHandlerID, waveHandle, pause);
+    public uint closeWaveFileHandle(ulong serverConnectionHandlerID, ulong waveHandle) => ((delegate*<ulong, ulong, uint>)pointers[27])(serverConnectionHandlerID, waveHandle);
+    public uint playWaveFile(ulong serverConnectionHandlerID, /*const */byte* path) => ((delegate*<ulong, /*const */byte*, uint>)pointers[28])(serverConnectionHandlerID, path);
+    public uint registerCustomDevice(/*const */byte* deviceID, /*const */byte* deviceDisplayName, int capFrequency, int capChannels, int playFrequency, int playChannels) => ((delegate*</*const */byte*, /*const */byte*, int, int, int, int, uint>)pointers[29])(deviceID, deviceDisplayName, capFrequency, capChannels, playFrequency, playChannels);
+    public uint unregisterCustomDevice(/*const */byte* deviceID) => ((delegate*</*const */byte*, uint>)pointers[30])(deviceID);
+    public uint processCustomCaptureData(/*const */byte* deviceName, /*const */short* buffer, int samples) => ((delegate*</*const */byte*, /*const */short*, int, uint>)pointers[31])(deviceName, buffer, samples);
+    public uint acquireCustomPlaybackData(/*const */byte* deviceName, short* buffer, int samples) => ((delegate*</*const */byte*, short*, int, uint>)pointers[32])(deviceName, buffer, samples);
 
     /* Preprocessor */
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*ident*/, float* /*result*/, uint> getPreProcessorInfoValueFloat;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*ident*/, byte** /*result*/, uint> getPreProcessorConfigValue;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*ident*/, /*const */byte* /*value*/, uint> setPreProcessorConfigValue;
+    public uint getPreProcessorInfoValueFloat(ulong serverConnectionHandlerID, /*const */byte* ident, float* result) => ((delegate*<ulong, /*const */byte*, float*, uint>)pointers[33])(serverConnectionHandlerID, ident, result);
+    public uint getPreProcessorConfigValue(ulong serverConnectionHandlerID, /*const */byte* ident, byte** result) => ((delegate*<ulong, /*const */byte*, byte**, uint>)pointers[34])(serverConnectionHandlerID, ident, result);
+    public uint setPreProcessorConfigValue(ulong serverConnectionHandlerID, /*const */byte* ident, /*const */byte* value) => ((delegate*<ulong, /*const */byte*, /*const */byte*, uint>)pointers[35])(serverConnectionHandlerID, ident, value);
 
     /* Encoder */
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*ident*/, byte** /*result*/, uint> getEncodeConfigValue;
+    public uint getEncodeConfigValue(ulong serverConnectionHandlerID, /*const */byte* ident, byte** result) => ((delegate*<ulong, /*const */byte*, byte**, uint>)pointers[36])(serverConnectionHandlerID, ident, result);
 
     /* Playback */
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*ident*/, float* /*result*/, uint> getPlaybackConfigValueAsFloat;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*ident*/, /*const */byte* /*value*/, uint> setPlaybackConfigValue;
-    public delegate*<ulong /*serverConnectionHandlerID*/, anyID /*clientID*/, float /*value*/, uint> setClientVolumeModifier;
+    public uint getPlaybackConfigValueAsFloat(ulong serverConnectionHandlerID, /*const */byte* ident, float* result) => ((delegate*<ulong, /*const */byte*, float*, uint>)pointers[37])(serverConnectionHandlerID, ident, result);
+    public uint setPlaybackConfigValue(ulong serverConnectionHandlerID, /*const */byte* ident, /*const */byte* value) => ((delegate*<ulong, /*const */byte*, /*const */byte*, uint>)pointers[38])(serverConnectionHandlerID, ident, value);
+    public uint setClientVolumeModifier(ulong serverConnectionHandlerID, anyID clientID, float value) => ((delegate*<ulong, anyID, float, uint>)pointers[39])(serverConnectionHandlerID, clientID, value);
 
     /* Recording status */
-    public delegate*<ulong /*serverConnectionHandlerID*/, uint> startVoiceRecording;
-    public delegate*<ulong /*serverConnectionHandlerID*/, uint> stopVoiceRecording;
+    public uint startVoiceRecording(ulong serverConnectionHandlerID) => ((delegate*<ulong, uint>)pointers[40])(serverConnectionHandlerID);
+    public uint stopVoiceRecording(ulong serverConnectionHandlerID) => ((delegate*<ulong, uint>)pointers[41])(serverConnectionHandlerID);
 
     /* 3d sound positioning */
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const*/ TS3_VECTOR* /*position*/, /*const*/ TS3_VECTOR* /*forward*/, /*const*/ TS3_VECTOR* /*up*/, uint> systemset3DListenerAttributes;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*waveHandle*/, /*const*/ TS3_VECTOR* /*position*/, uint> set3DWaveAttributes;
-    public delegate*<ulong /*serverConnectionHandlerID*/, float /*distanceFactor*/, float /*rolloffScale*/, uint> systemset3DSettings;
-    public delegate*<ulong /*serverConnectionHandlerID*/, anyID /*clientID*/, /*const*/ TS3_VECTOR* /*position*/, uint> channelset3DAttributes;
+    public uint systemset3DListenerAttributes(ulong serverConnectionHandlerID, /*const */TS3_VECTOR* position, /*const */TS3_VECTOR* forward, /*const */TS3_VECTOR* up) => ((delegate*<ulong, /*const */TS3_VECTOR*, /*const */TS3_VECTOR*, /*const */TS3_VECTOR*, uint>)pointers[42])(serverConnectionHandlerID, position, forward, up);
+    public uint set3DWaveAttributes(ulong serverConnectionHandlerID, ulong waveHandle, /*const */TS3_VECTOR* position) => ((delegate*<ulong, ulong, /*const */TS3_VECTOR*, uint>)pointers[43])(serverConnectionHandlerID, waveHandle, position);
+    public uint systemset3DSettings(ulong serverConnectionHandlerID, float distanceFactor, float rolloffScale) => ((delegate*<ulong, float, float, uint>)pointers[44])(serverConnectionHandlerID, distanceFactor, rolloffScale);
+    public uint channelset3DAttributes(ulong serverConnectionHandlerID, anyID clientID, /*const */TS3_VECTOR* position) => ((delegate*<ulong, anyID, /*const */TS3_VECTOR*, uint>)pointers[45])(serverConnectionHandlerID, clientID, position);
 
     /* Interaction with the server */
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*identity*/, /*const */byte* /*ip*/, uint /*port*/, /*const */byte* /*nickname*/, /*const */byte** /*defaultChannelArray*/, /*const */byte* /*defaultChannelPassword*/, /*const */byte* /*serverPassword*/, uint> startConnection;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*quitMessage*/, uint> stopConnection;
-    public delegate*<ulong /*serverConnectionHandlerID*/, anyID /*clientID*/, ulong /*newChannelID*/, /*const */byte* /*password*/, /*const */byte* /*returnCode*/, uint> requestClientMove;
-    public delegate*<ulong /*serverConnectionHandlerID*/, anyID /*clientID*/, /*const */byte* /*returnCode*/, uint> requestClientVariables;
-    public delegate*<ulong /*serverConnectionHandlerID*/, anyID /*clientID*/, /*const */byte* /*kickReason*/, /*const */byte* /*returnCode*/, uint> requestClientKickFromChannel;
-    public delegate*<ulong /*serverConnectionHandlerID*/, anyID /*clientID*/, /*const */byte* /*kickReason*/, /*const */byte* /*returnCode*/, uint> requestClientKickFromServer;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*channelID*/, int /*force*/, /*const */byte* /*returnCode*/, uint> requestChannelDelete;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*channelID*/, ulong /*newChannelParentID*/, ulong /*newChannelOrder*/, /*const */byte* /*returnCode*/, uint> requestChannelMove;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*message*/, anyID /*targetClientID*/, /*const */byte* /*returnCode*/, uint> requestSendPrivateTextMsg;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*message*/, ulong /*targetChannelID*/, /*const */byte* /*returnCode*/, uint> requestSendChannelTextMsg;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*message*/, /*const */byte* /*returnCode*/, uint> requestSendServerTextMsg;
-    public delegate*<ulong /*serverConnectionHandlerID*/, anyID /*clientID*/, /*const */byte* /*returnCode*/, uint> requestConnectionInfo;
-    public delegate*<ulong /*serverConnectionHandlerID*/, anyID /*clientID*/, /*const*/ ulong* /*targetChannelIDArray*/, /*const */anyID* /*targetClientIDArray*/, /*const */byte* /*returnCode*/, uint> requestClientSetWhisperList;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const*/ ulong* /*channelIDArray*/, /*const */byte* /*returnCode*/, uint> requestChannelSubscribe;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*returnCode*/, uint> requestChannelSubscribeAll;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const*/ ulong* /*channelIDArray*/, /*const */byte* /*returnCode*/, uint> requestChannelUnsubscribe;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*returnCode*/, uint> requestChannelUnsubscribeAll;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*channelID*/, /*const */byte* /*returnCode*/, uint> requestChannelDescription;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */anyID* /*clientIDArray*/, /*const */byte* /*returnCode*/, uint> requestMuteClients;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */anyID* /*clientIDArray*/, /*const */byte* /*returnCode*/, uint> requestUnmuteClients;
-    public delegate*<ulong /*serverConnectionHandlerID*/, anyID /*clientID*/, /*const */byte* /*message*/, /*const */byte* /*returnCode*/, uint> requestClientPoke;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*clientUniqueIdentifier*/, /*const */byte* /*returnCode*/, uint> requestClientIDs;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*clientUniqueIdentifier*/, anyID /*clientID*/, /*const */byte* /*returnCode*/, uint> clientChatClosed;
-    public delegate*<ulong /*serverConnectionHandlerID*/, anyID /*clientID*/, /*const */byte* /*returnCode*/, uint> clientChatComposing;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*password*/, /*const */byte* /*description*/, ulong /*duration*/, ulong /*targetChannelID*/, /*const */byte* /*targetChannelPW*/, /*const */byte* /*returnCode*/, uint> requestServerTemporaryPasswordAdd;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*password*/, /*const */byte* /*returnCode*/, uint> requestServerTemporaryPasswordDel;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*returnCode*/, uint> requestServerTemporaryPasswordList;
+    public uint startConnection(ulong serverConnectionHandlerID, /*const */byte* identity, /*const */byte* ip, uint port, /*const */byte* nickname, /*const */byte** defaultChannelArray, /*const */byte* defaultChannelPassword, /*const */byte* serverPassword) => ((delegate*<ulong, /*const */byte*, /*const */byte*, uint, /*const */byte*, /*const */byte**, /*const */byte*, /*const */byte*, uint>)pointers[46])(serverConnectionHandlerID, identity, ip, port, nickname, defaultChannelArray, defaultChannelPassword, serverPassword);
+    public uint stopConnection(ulong serverConnectionHandlerID, /*const */byte* quitMessage) => ((delegate*<ulong, /*const */byte*, uint>)pointers[47])(serverConnectionHandlerID, quitMessage);
+    public uint requestClientMove(ulong serverConnectionHandlerID, anyID clientID, ulong newChannelID, /*const */byte* password, /*const */byte* returnCode) => ((delegate*<ulong, anyID, ulong, /*const */byte*, /*const */byte*, uint>)pointers[48])(serverConnectionHandlerID, clientID, newChannelID, password, returnCode);
+    public uint requestClientVariables(ulong serverConnectionHandlerID, anyID clientID, /*const */byte* returnCode) => ((delegate*<ulong, anyID, /*const */byte*, uint>)pointers[49])(serverConnectionHandlerID, clientID, returnCode);
+    public uint requestClientKickFromChannel(ulong serverConnectionHandlerID, anyID clientID, /*const */byte* kickReason, /*const */byte* returnCode) => ((delegate*<ulong, anyID, /*const */byte*, /*const */byte*, uint>)pointers[50])(serverConnectionHandlerID, clientID, kickReason, returnCode);
+    public uint requestClientKickFromServer(ulong serverConnectionHandlerID, anyID clientID, /*const */byte* kickReason, /*const */byte* returnCode) => ((delegate*<ulong, anyID, /*const */byte*, /*const */byte*, uint>)pointers[51])(serverConnectionHandlerID, clientID, kickReason, returnCode);
+    public uint requestChannelDelete(ulong serverConnectionHandlerID, ulong channelID, int force, /*const */byte* returnCode) => ((delegate*<ulong, ulong, int, /*const */byte*, uint>)pointers[52])(serverConnectionHandlerID, channelID, force, returnCode);
+    public uint requestChannelMove(ulong serverConnectionHandlerID, ulong channelID, ulong newChannelParentID, ulong newChannelOrder, /*const */byte* returnCode) => ((delegate*<ulong, ulong, ulong, ulong, /*const */byte*, uint>)pointers[53])(serverConnectionHandlerID, channelID, newChannelParentID, newChannelOrder, returnCode);
+    public uint requestSendPrivateTextMsg(ulong serverConnectionHandlerID, /*const */byte* message, anyID targetClientID, /*const */byte* returnCode) => ((delegate*<ulong, /*const */byte*, anyID, /*const */byte*, uint>)pointers[54])(serverConnectionHandlerID, message, targetClientID, returnCode);
+    public uint requestSendChannelTextMsg(ulong serverConnectionHandlerID, /*const */byte* message, ulong targetChannelID, /*const */byte* returnCode) => ((delegate*<ulong, /*const */byte*, ulong, /*const */byte*, uint>)pointers[55])(serverConnectionHandlerID, message, targetChannelID, returnCode);
+    public uint requestSendServerTextMsg(ulong serverConnectionHandlerID, /*const */byte* message, /*const */byte* returnCode) => ((delegate*<ulong, /*const */byte*, /*const */byte*, uint>)pointers[56])(serverConnectionHandlerID, message, returnCode);
+    public uint requestConnectionInfo(ulong serverConnectionHandlerID, anyID clientID, /*const */byte* returnCode) => ((delegate*<ulong, anyID, /*const */byte*, uint>)pointers[57])(serverConnectionHandlerID, clientID, returnCode);
+    public uint requestClientSetWhisperList(ulong serverConnectionHandlerID, anyID clientID, /*const */ulong* targetChannelIDArray, /*const */anyID* targetClientIDArray, /*const */byte* returnCode) => ((delegate*<ulong, anyID, /*const */ulong*, /*const */anyID*, /*const */byte*, uint>)pointers[58])(serverConnectionHandlerID, clientID, targetChannelIDArray, targetClientIDArray, returnCode);
+    public uint requestChannelSubscribe(ulong serverConnectionHandlerID, /*const */ulong* channelIDArray, /*const */byte* returnCode) => ((delegate*<ulong, /*const */ulong*, /*const */byte*, uint>)pointers[59])(serverConnectionHandlerID, channelIDArray, returnCode);
+    public uint requestChannelSubscribeAll(ulong serverConnectionHandlerID, /*const */byte* returnCode) => ((delegate*<ulong, /*const */byte*, uint>)pointers[60])(serverConnectionHandlerID, returnCode);
+    public uint requestChannelUnsubscribe(ulong serverConnectionHandlerID, /*const */ulong* channelIDArray, /*const */byte* returnCode) => ((delegate*<ulong, /*const */ulong*, /*const */byte*, uint>)pointers[61])(serverConnectionHandlerID, channelIDArray, returnCode);
+    public uint requestChannelUnsubscribeAll(ulong serverConnectionHandlerID, /*const */byte* returnCode) => ((delegate*<ulong, /*const */byte*, uint>)pointers[62])(serverConnectionHandlerID, returnCode);
+    public uint requestChannelDescription(ulong serverConnectionHandlerID, ulong channelID, /*const */byte* returnCode) => ((delegate*<ulong, ulong, /*const */byte*, uint>)pointers[63])(serverConnectionHandlerID, channelID, returnCode);
+    public uint requestMuteClients(ulong serverConnectionHandlerID, /*const */anyID* clientIDArray, /*const */byte* returnCode) => ((delegate*<ulong, /*const */anyID*, /*const */byte*, uint>)pointers[64])(serverConnectionHandlerID, clientIDArray, returnCode);
+    public uint requestUnmuteClients(ulong serverConnectionHandlerID, /*const */anyID* clientIDArray, /*const */byte* returnCode) => ((delegate*<ulong, /*const */anyID*, /*const */byte*, uint>)pointers[65])(serverConnectionHandlerID, clientIDArray, returnCode);
+    public uint requestClientPoke(ulong serverConnectionHandlerID, anyID clientID, /*const */byte* message, /*const */byte* returnCode) => ((delegate*<ulong, anyID, /*const */byte*, /*const */byte*, uint>)pointers[66])(serverConnectionHandlerID, clientID, message, returnCode);
+    public uint requestClientIDs(ulong serverConnectionHandlerID, /*const */byte* clientUniqueIdentifier, /*const */byte* returnCode) => ((delegate*<ulong, /*const */byte*, /*const */byte*, uint>)pointers[67])(serverConnectionHandlerID, clientUniqueIdentifier, returnCode);
+    public uint clientChatClosed(ulong serverConnectionHandlerID, /*const */byte* clientUniqueIdentifier, anyID clientID, /*const */byte* returnCode) => ((delegate*<ulong, /*const */byte*, anyID, /*const */byte*, uint>)pointers[68])(serverConnectionHandlerID, clientUniqueIdentifier, clientID, returnCode);
+    public uint clientChatComposing(ulong serverConnectionHandlerID, anyID clientID, /*const */byte* returnCode) => ((delegate*<ulong, anyID, /*const */byte*, uint>)pointers[69])(serverConnectionHandlerID, clientID, returnCode);
+    public uint requestServerTemporaryPasswordAdd(ulong serverConnectionHandlerID, /*const */byte* password, /*const */byte* description, ulong duration, ulong targetChannelID, /*const */byte* targetChannelPW, /*const */byte* returnCode) => ((delegate*<ulong, /*const */byte*, /*const */byte*, ulong, ulong, /*const */byte*, /*const */byte*, uint>)pointers[70])(serverConnectionHandlerID, password, description, duration, targetChannelID, targetChannelPW, returnCode);
+    public uint requestServerTemporaryPasswordDel(ulong serverConnectionHandlerID, /*const */byte* password, /*const */byte* returnCode) => ((delegate*<ulong, /*const */byte*, /*const */byte*, uint>)pointers[71])(serverConnectionHandlerID, password, returnCode);
+    public uint requestServerTemporaryPasswordList(ulong serverConnectionHandlerID, /*const */byte* returnCode) => ((delegate*<ulong, /*const */byte*, uint>)pointers[72])(serverConnectionHandlerID, returnCode);
 
     /* Access clientlib information */
 
     /* Query own client ID */
-    public delegate*<ulong /*serverConnectionHandlerID*/, anyID* /*result*/, uint> getClientID;
+    public uint getClientID(ulong serverConnectionHandlerID, anyID* result) => ((delegate*<ulong, anyID*, uint>)pointers[73])(serverConnectionHandlerID, result);
 
     /* Client info */
-    public delegate*<ulong /*serverConnectionHandlerID*/, nint /*flag*/, int* /*result*/, uint> getClientSelfVariableAsInt;
-    public delegate*<ulong /*serverConnectionHandlerID*/, nint /*flag*/, byte** /*result*/, uint> getClientSelfVariableAsString;
-    public delegate*<ulong /*serverConnectionHandlerID*/, nint /*flag*/, int /*value*/, uint> setClientSelfVariableAsInt;
-    public delegate*<ulong /*serverConnectionHandlerID*/, nint /*flag*/, /*const */byte* /*value*/, uint> setClientSelfVariableAsString;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*returnCode*/, uint> flushClientSelfUpdates;
-    public delegate*<ulong /*serverConnectionHandlerID*/, anyID /*clientID*/, nint /*flag*/, int* /*result*/, uint> getClientVariableAsInt;
-    public delegate*<ulong /*serverConnectionHandlerID*/, anyID /*clientID*/, nint /*flag*/, ulong* /*result*/, uint> getClientVariableAsulong;
-    public delegate*<ulong /*serverConnectionHandlerID*/, anyID /*clientID*/, nint /*flag*/, byte** /*result*/, uint> getClientVariableAsString;
-    public delegate*<ulong /*serverConnectionHandlerID*/, anyID** /*result*/, uint> getClientList;
-    public delegate*<ulong /*serverConnectionHandlerID*/, anyID /*clientID*/, ulong* /*result*/, uint> getChannelOfClient;
+    public uint getClientSelfVariableAsInt(ulong serverConnectionHandlerID, nint flag, int* result) => ((delegate*<ulong, nint, int*, uint>)pointers[74])(serverConnectionHandlerID, flag, result);
+    public uint getClientSelfVariableAsString(ulong serverConnectionHandlerID, nint flag, byte** result) => ((delegate*<ulong, nint, byte**, uint>)pointers[75])(serverConnectionHandlerID, flag, result);
+    public uint setClientSelfVariableAsInt(ulong serverConnectionHandlerID, nint flag, int value) => ((delegate*<ulong, nint, int, uint>)pointers[76])(serverConnectionHandlerID, flag, value);
+    public uint setClientSelfVariableAsString(ulong serverConnectionHandlerID, nint flag, /*const */byte* value) => ((delegate*<ulong, nint, /*const */byte*, uint>)pointers[77])(serverConnectionHandlerID, flag, value);
+    public uint flushClientSelfUpdates(ulong serverConnectionHandlerID, /*const */byte* returnCode) => ((delegate*<ulong, /*const */byte*, uint>)pointers[78])(serverConnectionHandlerID, returnCode);
+    public uint getClientVariableAsInt(ulong serverConnectionHandlerID, anyID clientID, nint flag, int* result) => ((delegate*<ulong, anyID, nint, int*, uint>)pointers[79])(serverConnectionHandlerID, clientID, flag, result);
+    public uint getClientVariableAsulong(ulong serverConnectionHandlerID, anyID clientID, nint flag, ulong* result) => ((delegate*<ulong, anyID, nint, ulong*, uint>)pointers[80])(serverConnectionHandlerID, clientID, flag, result);
+    public uint getClientVariableAsString(ulong serverConnectionHandlerID, anyID clientID, nint flag, byte** result) => ((delegate*<ulong, anyID, nint, byte**, uint>)pointers[81])(serverConnectionHandlerID, clientID, flag, result);
+    public uint getClientList(ulong serverConnectionHandlerID, anyID** result) => ((delegate*<ulong, anyID**, uint>)pointers[82])(serverConnectionHandlerID, result);
+    public uint getChannelOfClient(ulong serverConnectionHandlerID, anyID clientID, ulong* result) => ((delegate*<ulong, anyID, ulong*, uint>)pointers[83])(serverConnectionHandlerID, clientID, result);
 
     /* Channel info */
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*channelID*/, nint /*flag*/, int* /*result*/, uint> getChannelVariableAsInt;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*channelID*/, nint /*flag*/, ulong* /*result*/, uint> getChannelVariableAsulong;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*channelID*/, nint /*flag*/, byte** /*result*/, uint> getChannelVariableAsString;
-    public delegate*<ulong /*serverConnectionHandlerID*/, byte** /*channelNameArray*/, ulong* /*result*/, uint> getChannelIDFromChannelNames;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*channelID*/, nint /*flag*/, int /*value*/, uint> setChannelVariableAsInt;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*channelID*/, nint /*flag*/, ulong /*value*/, uint> setChannelVariableAsulong;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*channelID*/, nint /*flag*/, /*const */byte* /*value*/, uint> setChannelVariableAsString;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*channelID*/, /*const */byte* /*returnCode*/, uint> flushChannelUpdates;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*channelParentID*/, /*const */byte* /*returnCode*/, uint> flushChannelCreation;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong** /*result*/, uint> getChannelList;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*channelID*/, anyID** /*result*/, uint> getChannelClientList;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*channelID*/, ulong* /*result*/, uint> getParentChannelOfChannel;
+    public uint getChannelVariableAsInt(ulong serverConnectionHandlerID, ulong channelID, nint flag, int* result) => ((delegate*<ulong, ulong, nint, int*, uint>)pointers[84])(serverConnectionHandlerID, channelID, flag, result);
+    public uint getChannelVariableAsulong(ulong serverConnectionHandlerID, ulong channelID, nint flag, ulong* result) => ((delegate*<ulong, ulong, nint, ulong*, uint>)pointers[85])(serverConnectionHandlerID, channelID, flag, result);
+    public uint getChannelVariableAsString(ulong serverConnectionHandlerID, ulong channelID, nint flag, byte** result) => ((delegate*<ulong, ulong, nint, byte**, uint>)pointers[86])(serverConnectionHandlerID, channelID, flag, result);
+    public uint getChannelIDFromChannelNames(ulong serverConnectionHandlerID, byte** channelNameArray, ulong* result) => ((delegate*<ulong, byte**, ulong*, uint>)pointers[87])(serverConnectionHandlerID, channelNameArray, result);
+    public uint setChannelVariableAsInt(ulong serverConnectionHandlerID, ulong channelID, nint flag, int value) => ((delegate*<ulong, ulong, nint, int, uint>)pointers[88])(serverConnectionHandlerID, channelID, flag, value);
+    public uint setChannelVariableAsulong(ulong serverConnectionHandlerID, ulong channelID, nint flag, ulong value) => ((delegate*<ulong, ulong, nint, ulong, uint>)pointers[89])(serverConnectionHandlerID, channelID, flag, value);
+    public uint setChannelVariableAsString(ulong serverConnectionHandlerID, ulong channelID, nint flag, /*const */byte* value) => ((delegate*<ulong, ulong, nint, /*const */byte*, uint>)pointers[90])(serverConnectionHandlerID, channelID, flag, value);
+    public uint flushChannelUpdates(ulong serverConnectionHandlerID, ulong channelID, /*const */byte* returnCode) => ((delegate*<ulong, ulong, /*const */byte*, uint>)pointers[91])(serverConnectionHandlerID, channelID, returnCode);
+    public uint flushChannelCreation(ulong serverConnectionHandlerID, ulong channelParentID, /*const */byte* returnCode) => ((delegate*<ulong, ulong, /*const */byte*, uint>)pointers[92])(serverConnectionHandlerID, channelParentID, returnCode);
+    public uint getChannelList(ulong serverConnectionHandlerID, ulong** result) => ((delegate*<ulong, ulong**, uint>)pointers[93])(serverConnectionHandlerID, result);
+    public uint getChannelClientList(ulong serverConnectionHandlerID, ulong channelID, anyID** result) => ((delegate*<ulong, ulong, anyID**, uint>)pointers[94])(serverConnectionHandlerID, channelID, result);
+    public uint getParentChannelOfChannel(ulong serverConnectionHandlerID, ulong channelID, ulong* result) => ((delegate*<ulong, ulong, ulong*, uint>)pointers[95])(serverConnectionHandlerID, channelID, result);
 
     /* Server info */
-    public delegate*<ulong** /*result*/, uint> getServerConnectionHandlerList;
-    public delegate*<ulong /*serverConnectionHandlerID*/, nint /*flag*/, int* /*result*/, uint> getServerVariableAsInt;
-    public delegate*<ulong /*serverConnectionHandlerID*/, nint /*flag*/, ulong* /*result*/, uint> getServerVariableAsulong;
-    public delegate*<ulong /*serverConnectionHandlerID*/, nint /*flag*/, byte** /*result*/, uint> getServerVariableAsString;
-    public delegate*<ulong /*serverConnectionHandlerID*/, uint> requestServerVariables;
+    public uint getServerConnectionHandlerList(ulong** result) => ((delegate*<ulong**, uint>)pointers[96])(result);
+    public uint getServerVariableAsInt(ulong serverConnectionHandlerID, nint flag, int* result) => ((delegate*<ulong, nint, int*, uint>)pointers[97])(serverConnectionHandlerID, flag, result);
+    public uint getServerVariableAsulong(ulong serverConnectionHandlerID, nint flag, ulong* result) => ((delegate*<ulong, nint, ulong*, uint>)pointers[98])(serverConnectionHandlerID, flag, result);
+    public uint getServerVariableAsString(ulong serverConnectionHandlerID, nint flag, byte** result) => ((delegate*<ulong, nint, byte**, uint>)pointers[99])(serverConnectionHandlerID, flag, result);
+    public uint requestServerVariables(ulong serverConnectionHandlerID) => ((delegate*<ulong, uint>)pointers[100])(serverConnectionHandlerID);
 
     /* Connection info */
-    public delegate*<ulong /*serverConnectionHandlerID*/, int* /*result*/, uint> getConnectionStatus;
-    public delegate*<ulong /*serverConnectionHandlerID*/, anyID /*clientID*/, nint /*flag*/, ulong* /*result*/, uint> getConnectionVariableAsulong;
-    public delegate*<ulong /*serverConnectionHandlerID*/, anyID /*clientID*/, nint /*flag*/, double* /*result*/, uint> getConnectionVariableAsDouble;
-    public delegate*<ulong /*serverConnectionHandlerID*/, anyID /*clientID*/, nint /*flag*/, byte** /*result*/, uint> getConnectionVariableAsString;
-    public delegate*<ulong /*serverConnectionHandlerID*/, anyID /*clientID*/, uint> cleanUpConnectionInfo;
+    public uint getConnectionStatus(ulong serverConnectionHandlerID, int* result) => ((delegate*<ulong, int*, uint>)pointers[101])(serverConnectionHandlerID, result);
+    public uint getConnectionVariableAsulong(ulong serverConnectionHandlerID, anyID clientID, nint flag, ulong* result) => ((delegate*<ulong, anyID, nint, ulong*, uint>)pointers[102])(serverConnectionHandlerID, clientID, flag, result);
+    public uint getConnectionVariableAsDouble(ulong serverConnectionHandlerID, anyID clientID, nint flag, double* result) => ((delegate*<ulong, anyID, nint, double*, uint>)pointers[103])(serverConnectionHandlerID, clientID, flag, result);
+    public uint getConnectionVariableAsString(ulong serverConnectionHandlerID, anyID clientID, nint flag, byte** result) => ((delegate*<ulong, anyID, nint, byte**, uint>)pointers[104])(serverConnectionHandlerID, clientID, flag, result);
+    public uint cleanUpConnectionInfo(ulong serverConnectionHandlerID, anyID clientID) => ((delegate*<ulong, anyID, uint>)pointers[105])(serverConnectionHandlerID, clientID);
 
     /* Client related */
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*clientUniqueIdentifier*/, /*const */byte* /*returnCode*/, uint> requestClientDBIDfromUID;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*clientUniqueIdentifier*/, /*const */byte* /*returnCode*/, uint> requestClientNamefromUID;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*clientDatabaseID*/, /*const */byte* /*returnCode*/, uint> requestClientNamefromDBID;
-    public delegate*<ulong /*serverConnectionHandlerID*/, anyID /*clientID*/, /*const */byte* /*clientDescription*/, /*const */byte* /*returnCode*/, uint> requestClientEditDescription;
-    public delegate*<ulong /*serverConnectionHandlerID*/, anyID /*clientID*/, int /*isTalker*/, /*const */byte* /*returnCode*/, uint> requestClientSetIsTalker;
-    public delegate*<ulong /*serverConnectionHandlerID*/, int /*isTalkerRequest*/, /*const */byte* /*isTalkerRequestMessage*/, /*const */byte* /*returnCode*/, uint> requestIsTalker;
+    public uint requestClientDBIDfromUID(ulong serverConnectionHandlerID, /*const */byte* clientUniqueIdentifier, /*const */byte* returnCode) => ((delegate*<ulong, /*const */byte*, /*const */byte*, uint>)pointers[106])(serverConnectionHandlerID, clientUniqueIdentifier, returnCode);
+    public uint requestClientNamefromUID(ulong serverConnectionHandlerID, /*const */byte* clientUniqueIdentifier, /*const */byte* returnCode) => ((delegate*<ulong, /*const */byte*, /*const */byte*, uint>)pointers[107])(serverConnectionHandlerID, clientUniqueIdentifier, returnCode);
+    public uint requestClientNamefromDBID(ulong serverConnectionHandlerID, ulong clientDatabaseID, /*const */byte* returnCode) => ((delegate*<ulong, ulong, /*const */byte*, uint>)pointers[108])(serverConnectionHandlerID, clientDatabaseID, returnCode);
+    public uint requestClientEditDescription(ulong serverConnectionHandlerID, anyID clientID, /*const */byte* clientDescription, /*const */byte* returnCode) => ((delegate*<ulong, anyID, /*const */byte*, /*const */byte*, uint>)pointers[109])(serverConnectionHandlerID, clientID, clientDescription, returnCode);
+    public uint requestClientSetIsTalker(ulong serverConnectionHandlerID, anyID clientID, int isTalker, /*const */byte* returnCode) => ((delegate*<ulong, anyID, int, /*const */byte*, uint>)pointers[110])(serverConnectionHandlerID, clientID, isTalker, returnCode);
+    public uint requestIsTalker(ulong serverConnectionHandlerID, int isTalkerRequest, /*const */byte* isTalkerRequestMessage, /*const */byte* returnCode) => ((delegate*<ulong, int, /*const */byte*, /*const */byte*, uint>)pointers[111])(serverConnectionHandlerID, isTalkerRequest, isTalkerRequestMessage, returnCode);
 
     /* Plugin related */
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*command*/, /*const */byte* /*returnCode*/, uint> requestSendClientQueryCommand;
+    public uint requestSendClientQueryCommand(ulong serverConnectionHandlerID, /*const */byte* command, /*const */byte* returnCode) => ((delegate*<ulong, /*const */byte*, /*const */byte*, uint>)pointers[112])(serverConnectionHandlerID, command, returnCode);
 
     /* Filetransfer */
-    public delegate*<anyID /*transferID*/, byte** /*result*/, uint> getTransferFileName;
-    public delegate*<anyID /*transferID*/, byte** /*result*/, uint> getTransferFilePath;
-    public delegate*<anyID /*transferID*/, ulong* /*result*/, uint> getTransferFileSize;
-    public delegate*<anyID /*transferID*/, ulong* /*result*/, uint> getTransferFileSizeDone;
-    public delegate*<anyID /*transferID*/, int* /*result*/, uint> isTransferSender;  /* 1 == upload, 0 == download */
-    public delegate*<anyID /*transferID*/, int* /*result*/, uint> getTransferStatus;
-    public delegate*<anyID /*transferID*/, float* /*result*/, uint> getCurrentTransferSpeed;
-    public delegate*<anyID /*transferID*/, float* /*result*/, uint> getAverageTransferSpeed;
-    public delegate*<anyID /*transferID*/, ulong* /*result*/, uint> getTransferRunTime;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*channelID*/, /*const */byte* /*channelPW*/, /*const */byte* /*file*/, int /*overwrite*/, int /*resume*/, /*const */byte* /*sourceDirectory*/, anyID* /*result*/, /*const */byte* /*returnCode*/, uint> sendFile;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*channelID*/, /*const */byte* /*channelPW*/, /*const */byte* /*file*/, int /*overwrite*/, int /*resume*/, /*const */byte* /*destinationDirectory*/, anyID* /*result*/, /*const */byte* /*returnCode*/, uint> requestFile;
-    public delegate*<ulong /*serverConnectionHandlerID*/, anyID /*transferID*/, int /*deleteUnfinishedFile*/, /*const */byte* /*returnCode*/, uint> haltTransfer;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*channelID*/, /*const */byte* /*channelPW*/, /*const */byte* /*path*/, /*const */byte* /*returnCode*/, uint> requestFileList;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*channelID*/, /*const */byte* /*channelPW*/, /*const */byte* /*file*/, /*const */byte* /*returnCode*/, uint> requestFileInfo;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*channelID*/, /*const */byte* /*channelPW*/, /*const */byte** /*file*/, /*const */byte* /*returnCode*/, uint> requestDeleteFile;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*channelID*/, /*const */byte* /*channelPW*/, /*const */byte* /*directoryPath*/, /*const */byte* /*returnCode*/, uint> requestCreateDirectory;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*fromChannelID*/, /*const */byte* /*channelPW*/, ulong /*toChannelID*/, /*const */byte* /*toChannelPW*/, /*const */byte* /*oldFile*/, /*const */byte* /*newFile*/, /*const */byte* /*returnCode*/, uint> requestRenameFile;
+    public uint getTransferFileName(anyID transferID, byte** result) => ((delegate*<anyID, byte**, uint>)pointers[113])(transferID, result);
+    public uint getTransferFilePath(anyID transferID, byte** result) => ((delegate*<anyID, byte**, uint>)pointers[114])(transferID, result);
+    public uint getTransferFileSize(anyID transferID, ulong* result) => ((delegate*<anyID, ulong*, uint>)pointers[115])(transferID, result);
+    public uint getTransferFileSizeDone(anyID transferID, ulong* result) => ((delegate*<anyID, ulong*, uint>)pointers[116])(transferID, result);
+    public uint isTransferSender(anyID transferID, int* result) => ((delegate*<anyID, int*, uint>)pointers[117])(transferID, result);  /* 1 == upload, 0 == download */
+    public uint getTransferStatus(anyID transferID, int* result) => ((delegate*<anyID, int*, uint>)pointers[118])(transferID, result);
+    public uint getCurrentTransferSpeed(anyID transferID, float* result) => ((delegate*<anyID, float*, uint>)pointers[119])(transferID, result);
+    public uint getAverageTransferSpeed(anyID transferID, float* result) => ((delegate*<anyID, float*, uint>)pointers[120])(transferID, result);
+    public uint getTransferRunTime(anyID transferID, ulong* result) => ((delegate*<anyID, ulong*, uint>)pointers[121])(transferID, result);
+    public uint sendFile(ulong serverConnectionHandlerID, ulong channelID, /*const */byte* channelPW, /*const */byte* file, int overwrite, int resume, /*const */byte* sourceDirectory, anyID* result, /*const */byte* returnCode) => ((delegate*<ulong, ulong, /*const */byte*, /*const */byte*, int, int, /*const */byte*, anyID*, /*const */byte*, uint>)pointers[122])(serverConnectionHandlerID, channelID, channelPW, file, overwrite, resume, sourceDirectory, result, returnCode);
+    public uint requestFile(ulong serverConnectionHandlerID, ulong channelID, /*const */byte* channelPW, /*const */byte* file, int overwrite, int resume, /*const */byte* destinationDirectory, anyID* result, /*const */byte* returnCode) => ((delegate*<ulong, ulong, /*const */byte*, /*const */byte*, int, int, /*const */byte*, anyID*, /*const */byte*, uint>)pointers[123])(serverConnectionHandlerID, channelID, channelPW, file, overwrite, resume, destinationDirectory, result, returnCode);
+    public uint haltTransfer(ulong serverConnectionHandlerID, anyID transferID, int deleteUnfinishedFile, /*const */byte* returnCode) => ((delegate*<ulong, anyID, int, /*const */byte*, uint>)pointers[124])(serverConnectionHandlerID, transferID, deleteUnfinishedFile, returnCode);
+    public uint requestFileList(ulong serverConnectionHandlerID, ulong channelID, /*const */byte* channelPW, /*const */byte* path, /*const */byte* returnCode) => ((delegate*<ulong, ulong, /*const */byte*, /*const */byte*, /*const */byte*, uint>)pointers[125])(serverConnectionHandlerID, channelID, channelPW, path, returnCode);
+    public uint requestFileInfo(ulong serverConnectionHandlerID, ulong channelID, /*const */byte* channelPW, /*const */byte* file, /*const */byte* returnCode) => ((delegate*<ulong, ulong, /*const */byte*, /*const */byte*, /*const */byte*, uint>)pointers[126])(serverConnectionHandlerID, channelID, channelPW, file, returnCode);
+    public uint requestDeleteFile(ulong serverConnectionHandlerID, ulong channelID, /*const */byte* channelPW, /*const */byte** file, /*const */byte* returnCode) => ((delegate*<ulong, ulong, /*const */byte*, /*const */byte**, /*const */byte*, uint>)pointers[127])(serverConnectionHandlerID, channelID, channelPW, file, returnCode);
+    public uint requestCreateDirectory(ulong serverConnectionHandlerID, ulong channelID, /*const */byte* channelPW, /*const */byte* directoryPath, /*const */byte* returnCode) => ((delegate*<ulong, ulong, /*const */byte*, /*const */byte*, /*const */byte*, uint>)pointers[128])(serverConnectionHandlerID, channelID, channelPW, directoryPath, returnCode);
+    public uint requestRenameFile(ulong serverConnectionHandlerID, ulong fromChannelID, /*const */byte* channelPW, ulong toChannelID, /*const */byte* toChannelPW, /*const */byte* oldFile, /*const */byte* newFile, /*const */byte* returnCode) => ((delegate*<ulong, ulong, /*const */byte*, ulong, /*const */byte*, /*const */byte*, /*const */byte*, /*const */byte*, uint>)pointers[129])(serverConnectionHandlerID, fromChannelID, channelPW, toChannelID, toChannelPW, oldFile, newFile, returnCode);
 
     /* Offline message management */
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*toClientUID*/, /*const */byte* /*subject*/, /*const */byte* /*message*/, /*const */byte* /*returnCode*/, uint> requestMessageAdd;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*messageID*/, /*const */byte* /*returnCode*/, uint> requestMessageDel;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*messageID*/, /*const */byte* /*returnCode*/, uint> requestMessageGet;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*returnCode*/, uint> requestMessageList;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*messageID*/, int /*flag*/, /*const */byte* /*returnCode*/, uint> requestMessageUpdateFlag;
+    public uint requestMessageAdd(ulong serverConnectionHandlerID, /*const */byte* toClientUID, /*const */byte* subject, /*const */byte* message, /*const */byte* returnCode) => ((delegate*<ulong, /*const */byte*, /*const */byte*, /*const */byte*, /*const */byte*, uint>)pointers[130])(serverConnectionHandlerID, toClientUID, subject, message, returnCode);
+    public uint requestMessageDel(ulong serverConnectionHandlerID, ulong messageID, /*const */byte* returnCode) => ((delegate*<ulong, ulong, /*const */byte*, uint>)pointers[131])(serverConnectionHandlerID, messageID, returnCode);
+    public uint requestMessageGet(ulong serverConnectionHandlerID, ulong messageID, /*const */byte* returnCode) => ((delegate*<ulong, ulong, /*const */byte*, uint>)pointers[132])(serverConnectionHandlerID, messageID, returnCode);
+    public uint requestMessageList(ulong serverConnectionHandlerID, /*const */byte* returnCode) => ((delegate*<ulong, /*const */byte*, uint>)pointers[133])(serverConnectionHandlerID, returnCode);
+    public uint requestMessageUpdateFlag(ulong serverConnectionHandlerID, ulong messageID, int flag, /*const */byte* returnCode) => ((delegate*<ulong, ulong, int, /*const */byte*, uint>)pointers[134])(serverConnectionHandlerID, messageID, flag, returnCode);
 
     /* Interacting with the server - confirming passwords */
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*serverPassword*/, /*const */byte* /*returnCode*/, uint> verifyServerPassword;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*channelID*/, /*const */byte* /*channelPassword*/, /*const */byte* /*returnCode*/, uint> verifyChannelPassword;
+    public uint verifyServerPassword(ulong serverConnectionHandlerID, /*const */byte* serverPassword, /*const */byte* returnCode) => ((delegate*<ulong, /*const */byte*, /*const */byte*, uint>)pointers[135])(serverConnectionHandlerID, serverPassword, returnCode);
+    public uint verifyChannelPassword(ulong serverConnectionHandlerID, ulong channelID, /*const */byte* channelPassword, /*const */byte* returnCode) => ((delegate*<ulong, ulong, /*const */byte*, /*const */byte*, uint>)pointers[136])(serverConnectionHandlerID, channelID, channelPassword, returnCode);
 
     /* Interacting with the server - banning */
-    public delegate*<ulong /*serverConnectionHandlerID*/, anyID /*clientID*/, ulong /*timeInSeconds*/, /*const */byte* /*banReason*/, /*const */byte* /*returnCode*/, uint> banclient;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*ipRegExp*/, /*const */byte* /*nameRegexp*/, /*const */byte* /*uniqueIdentity*/, /*const */byte* /*mytsID*/, ulong /*timeInSeconds*/, /*const */byte* /*banReason*/, /*const */byte* /*returnCode*/, uint> banadd;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*clientDBID*/, ulong /*timeInSeconds*/, /*const */byte* /*banReason*/, /*const */byte* /*returnCode*/, uint> banclientdbid;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*banID*/, /*const */byte* /*returnCode*/, uint> bandel;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*returnCode*/, uint> bandelall;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*start*/, uint /*duration*/, /*const */byte* /*returnCode*/, uint> requestBanList;
+    public uint banclient(ulong serverConnectionHandlerID, anyID clientID, ulong timeInSeconds, /*const */byte* banReason, /*const */byte* returnCode) => ((delegate*<ulong, anyID, ulong, /*const */byte*, /*const */byte*, uint>)pointers[137])(serverConnectionHandlerID, clientID, timeInSeconds, banReason, returnCode);
+    public uint banadd(ulong serverConnectionHandlerID, /*const */byte* ipRegExp, /*const */byte* nameRegexp, /*const */byte* uniqueIdentity, /*const */byte* mytsID, ulong timeInSeconds, /*const */byte* banReason, /*const */byte* returnCode) => ((delegate*<ulong, /*const */byte*, /*const */byte*, /*const */byte*, /*const */byte*, ulong, /*const */byte*, /*const */byte*, uint>)pointers[138])(serverConnectionHandlerID, ipRegExp, nameRegexp, uniqueIdentity, mytsID, timeInSeconds, banReason, returnCode);
+    public uint banclientdbid(ulong serverConnectionHandlerID, ulong clientDBID, ulong timeInSeconds, /*const */byte* banReason, /*const */byte* returnCode) => ((delegate*<ulong, ulong, ulong, /*const */byte*, /*const */byte*, uint>)pointers[139])(serverConnectionHandlerID, clientDBID, timeInSeconds, banReason, returnCode);
+    public uint bandel(ulong serverConnectionHandlerID, ulong banID, /*const */byte* returnCode) => ((delegate*<ulong, ulong, /*const */byte*, uint>)pointers[140])(serverConnectionHandlerID, banID, returnCode);
+    public uint bandelall(ulong serverConnectionHandlerID, /*const */byte* returnCode) => ((delegate*<ulong, /*const */byte*, uint>)pointers[141])(serverConnectionHandlerID, returnCode);
+    public uint requestBanList(ulong serverConnectionHandlerID, ulong start, uint duration, /*const */byte* returnCode) => ((delegate*<ulong, ulong, uint, /*const */byte*, uint>)pointers[142])(serverConnectionHandlerID, start, duration, returnCode);
 
     /* Interacting with the server - complain */
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*targetClientDatabaseID*/, /*const */byte* /*complainReason*/, /*const */byte* /*returnCode*/, uint> requestComplainAdd;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*targetClientDatabaseID*/, ulong /*fromClientDatabaseID*/, /*const */byte* /*returnCode*/, uint> requestComplainDel;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*targetClientDatabaseID*/, /*const */byte* /*returnCode*/, uint> requestComplainDelAll;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*targetClientDatabaseID*/, /*const */byte* /*returnCode*/, uint> requestComplainList;
+    public uint requestComplainAdd(ulong serverConnectionHandlerID, ulong targetClientDatabaseID, /*const */byte* complainReason, /*const */byte* returnCode) => ((delegate*<ulong, ulong, /*const */byte*, /*const */byte*, uint>)pointers[143])(serverConnectionHandlerID, targetClientDatabaseID, complainReason, returnCode);
+    public uint requestComplainDel(ulong serverConnectionHandlerID, ulong targetClientDatabaseID, ulong fromClientDatabaseID, /*const */byte* returnCode) => ((delegate*<ulong, ulong, ulong, /*const */byte*, uint>)pointers[144])(serverConnectionHandlerID, targetClientDatabaseID, fromClientDatabaseID, returnCode);
+    public uint requestComplainDelAll(ulong serverConnectionHandlerID, ulong targetClientDatabaseID, /*const */byte* returnCode) => ((delegate*<ulong, ulong, /*const */byte*, uint>)pointers[145])(serverConnectionHandlerID, targetClientDatabaseID, returnCode);
+    public uint requestComplainList(ulong serverConnectionHandlerID, ulong targetClientDatabaseID, /*const */byte* returnCode) => ((delegate*<ulong, ulong, /*const */byte*, uint>)pointers[146])(serverConnectionHandlerID, targetClientDatabaseID, returnCode);
 
     /* Permissions */
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*returnCode*/, uint> requestServerGroupList;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*groupName*/, int /*groupType*/, /*const */byte* /*returnCode*/, uint> requestServerGroupAdd;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*serverGroupID*/, int /*force*/, /*const */byte* /*returnCode*/, uint> requestServerGroupDel;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*serverGroupID*/, ulong /*clientDatabaseID*/, /*const */byte* /*returnCode*/, uint> requestServerGroupAddClient;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*serverGroupID*/, ulong /*clientDatabaseID*/, /*const */byte* /*returnCode*/, uint> requestServerGroupDelClient;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*clientDatabaseID*/, /*const */byte* /*returnCode*/, uint> requestServerGroupsByClientID;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*serverGroupID*/, int /*continueonerror*/, /*const*/ uint* /*permissionIDArray*/, /*const*/ int* /*permissionValueArray*/, /*const*/ int* /*permissionNegatedArray*/, /*const*/ int* /*permissionSkipArray*/, int /*arraySize*/, /*const */byte* /*returnCode*/, uint> requestServerGroupAddPerm;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*serverGroupID*/, int /*continueOnError*/, /*const*/ uint* /*permissionIDArray*/, int /*arraySize*/, /*const */byte* /*returnCode*/, uint> requestServerGroupDelPerm;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*serverGroupID*/, /*const */byte* /*returnCode*/, uint> requestServerGroupPermList;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*serverGroupID*/, int /*withNames*/, /*const */byte* /*returnCode*/, uint> requestServerGroupClientList;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*returnCode*/, uint> requestChannelGroupList;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*groupName*/, int /*groupType*/, /*const */byte* /*returnCode*/, uint> requestChannelGroupAdd;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*channelGroupID*/, int /*force*/, /*const */byte* /*returnCode*/, uint> requestChannelGroupDel;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*channelGroupID*/, int /*continueonerror*/, /*const*/ uint* /*permissionIDArray*/, /*const*/ int* /*permissionValueArray*/, int /*arraySize*/, /*const */byte* /*returnCode*/, uint> requestChannelGroupAddPerm;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*channelGroupID*/, int /*continueOnError*/, /*const*/ uint* /*permissionIDArray*/, int /*arraySize*/, /*const */byte* /*returnCode*/, uint> requestChannelGroupDelPerm;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*channelGroupID*/, /*const */byte* /*returnCode*/, uint> requestChannelGroupPermList;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const*/ ulong* /*channelGroupIDArray*/, /*const*/ ulong* /*channelIDArray*/, /*const*/ ulong* /*clientDatabaseIDArray*/, int /*arraySize*/, /*const */byte* /*returnCode*/, uint> requestSetClientChannelGroup;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*channelID*/, /*const*/ uint* /*permissionIDArray*/, /*const*/ int* /*permissionValueArray*/, int /*arraySize*/, /*const */byte* /*returnCode*/, uint> requestChannelAddPerm;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*channelID*/, /*const*/ uint* /*permissionIDArray*/, int /*arraySize*/, /*const */byte* /*returnCode*/, uint> requestChannelDelPerm;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*channelID*/, /*const */byte* /*returnCode*/, uint> requestChannelPermList;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*clientDatabaseID*/, /*const*/ uint* /*permissionIDArray*/, /*const*/ int* /*permissionValueArray*/, /*const*/ int* /*permissionSkipArray*/, int /*arraySize*/, /*const */byte* /*returnCode*/, uint> requestClientAddPerm;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*clientDatabaseID*/, /*const*/ uint* /*permissionIDArray*/, int /*arraySize*/, /*const */byte* /*returnCode*/, uint> requestClientDelPerm;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*clientDatabaseID*/, /*const */byte* /*returnCode*/, uint> requestClientPermList;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*channelID*/, ulong /*clientDatabaseID*/, /*const*/ uint* /*permissionIDArray*/, /*const*/ int* /*permissionValueArray*/, int /*arraySize*/, /*const */byte* /*returnCode*/, uint> requestChannelClientAddPerm;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*channelID*/, ulong /*clientDatabaseID*/, /*const*/ uint* /*permissionIDArray*/, int /*arraySize*/, /*const */byte* /*returnCode*/, uint> requestChannelClientDelPerm;
-    public delegate*<ulong /*serverConnectionHandlerID*/, ulong /*channelID*/, ulong /*clientDatabaseID*/, /*const */byte* /*returnCode*/, uint> requestChannelClientPermList;
-    public delegate*<ulong /*serverConnectionHandler*/, /*const */byte* /*tokenKey*/, /*const */byte* /*returnCode*/, uint> privilegeKeyUse;
-    public delegate*<ulong /*serverConnectionHandler*/, /*const */byte* /*returnCode*/, uint> requestPermissionList;
-    public delegate*<ulong /*serverConnectionHandler*/, ulong /*clientDBID*/, ulong /*channelID*/, /*const */byte* /*returnCode*/, uint> requestPermissionOverview;
+    public uint requestServerGroupList(ulong serverConnectionHandlerID, /*const */byte* returnCode) => ((delegate*<ulong, /*const */byte*, uint>)pointers[147])(serverConnectionHandlerID, returnCode);
+    public uint requestServerGroupAdd(ulong serverConnectionHandlerID, /*const */byte* groupName, int groupType, /*const */byte* returnCode) => ((delegate*<ulong, /*const */byte*, int, /*const */byte*, uint>)pointers[148])(serverConnectionHandlerID, groupName, groupType, returnCode);
+    public uint requestServerGroupDel(ulong serverConnectionHandlerID, ulong serverGroupID, int force, /*const */byte* returnCode) => ((delegate*<ulong, ulong, int, /*const */byte*, uint>)pointers[149])(serverConnectionHandlerID, serverGroupID, force, returnCode);
+    public uint requestServerGroupAddClient(ulong serverConnectionHandlerID, ulong serverGroupID, ulong clientDatabaseID, /*const */byte* returnCode) => ((delegate*<ulong, ulong, ulong, /*const */byte*, uint>)pointers[150])(serverConnectionHandlerID, serverGroupID, clientDatabaseID, returnCode);
+    public uint requestServerGroupDelClient(ulong serverConnectionHandlerID, ulong serverGroupID, ulong clientDatabaseID, /*const */byte* returnCode) => ((delegate*<ulong, ulong, ulong, /*const */byte*, uint>)pointers[151])(serverConnectionHandlerID, serverGroupID, clientDatabaseID, returnCode);
+    public uint requestServerGroupsByClientID(ulong serverConnectionHandlerID, ulong clientDatabaseID, /*const */byte* returnCode) => ((delegate*<ulong, ulong, /*const */byte*, uint>)pointers[152])(serverConnectionHandlerID, clientDatabaseID, returnCode);
+    public uint requestServerGroupAddPerm(ulong serverConnectionHandlerID, ulong serverGroupID, int continueonerror, /*const */uint* permissionIDArray, /*const */int* permissionValueArray, /*const */int* permissionNegatedArray, /*const */int* permissionSkipArray, int arraySize, /*const */byte* returnCode) => ((delegate*<ulong, ulong, int, /*const */uint*, /*const */int*, /*const */int*, /*const */int*, int, /*const */byte*, uint>)pointers[153])(serverConnectionHandlerID, serverGroupID, continueonerror, permissionIDArray, permissionValueArray, permissionNegatedArray, permissionSkipArray, arraySize, returnCode);
+    public uint requestServerGroupDelPerm(ulong serverConnectionHandlerID, ulong serverGroupID, int continueOnError, /*const */uint* permissionIDArray, int arraySize, /*const */byte* returnCode) => ((delegate*<ulong, ulong, int, /*const */uint*, int, /*const */byte*, uint>)pointers[154])(serverConnectionHandlerID, serverGroupID, continueOnError, permissionIDArray, arraySize, returnCode);
+    public uint requestServerGroupPermList(ulong serverConnectionHandlerID, ulong serverGroupID, /*const */byte* returnCode) => ((delegate*<ulong, ulong, /*const */byte*, uint>)pointers[155])(serverConnectionHandlerID, serverGroupID, returnCode);
+    public uint requestServerGroupClientList(ulong serverConnectionHandlerID, ulong serverGroupID, int withNames, /*const */byte* returnCode) => ((delegate*<ulong, ulong, int, /*const */byte*, uint>)pointers[156])(serverConnectionHandlerID, serverGroupID, withNames, returnCode);
+    public uint requestChannelGroupList(ulong serverConnectionHandlerID, /*const */byte* returnCode) => ((delegate*<ulong, /*const */byte*, uint>)pointers[157])(serverConnectionHandlerID, returnCode);
+    public uint requestChannelGroupAdd(ulong serverConnectionHandlerID, /*const */byte* groupName, int groupType, /*const */byte* returnCode) => ((delegate*<ulong, /*const */byte*, int, /*const */byte*, uint>)pointers[158])(serverConnectionHandlerID, groupName, groupType, returnCode);
+    public uint requestChannelGroupDel(ulong serverConnectionHandlerID, ulong channelGroupID, int force, /*const */byte* returnCode) => ((delegate*<ulong, ulong, int, /*const */byte*, uint>)pointers[159])(serverConnectionHandlerID, channelGroupID, force, returnCode);
+    public uint requestChannelGroupAddPerm(ulong serverConnectionHandlerID, ulong channelGroupID, int continueonerror, /*const */uint* permissionIDArray, /*const */int* permissionValueArray, int arraySize, /*const */byte* returnCode) => ((delegate*<ulong, ulong, int, /*const */uint*, /*const */int*, int, /*const */byte*, uint>)pointers[160])(serverConnectionHandlerID, channelGroupID, continueonerror, permissionIDArray, permissionValueArray, arraySize, returnCode);
+    public uint requestChannelGroupDelPerm(ulong serverConnectionHandlerID, ulong channelGroupID, int continueOnError, /*const */uint* permissionIDArray, int arraySize, /*const */byte* returnCode) => ((delegate*<ulong, ulong, int, /*const */uint*, int, /*const */byte*, uint>)pointers[161])(serverConnectionHandlerID, channelGroupID, continueOnError, permissionIDArray, arraySize, returnCode);
+    public uint requestChannelGroupPermList(ulong serverConnectionHandlerID, ulong channelGroupID, /*const */byte* returnCode) => ((delegate*<ulong, ulong, /*const */byte*, uint>)pointers[162])(serverConnectionHandlerID, channelGroupID, returnCode);
+    public uint requestSetClientChannelGroup(ulong serverConnectionHandlerID, /*const */ulong* channelGroupIDArray, /*const */ulong* channelIDArray, /*const */ulong* clientDatabaseIDArray, int arraySize, /*const */byte* returnCode) => ((delegate*<ulong, /*const */ulong*, /*const */ulong*, /*const */ulong*, int, /*const */byte*, uint>)pointers[163])(serverConnectionHandlerID, channelGroupIDArray, channelIDArray, clientDatabaseIDArray, arraySize, returnCode);
+    public uint requestChannelAddPerm(ulong serverConnectionHandlerID, ulong channelID, /*const */uint* permissionIDArray, /*const */int* permissionValueArray, int arraySize, /*const */byte* returnCode) => ((delegate*<ulong, ulong, /*const */uint*, /*const */int*, int, /*const */byte*, uint>)pointers[164])(serverConnectionHandlerID, channelID, permissionIDArray, permissionValueArray, arraySize, returnCode);
+    public uint requestChannelDelPerm(ulong serverConnectionHandlerID, ulong channelID, /*const */uint* permissionIDArray, int arraySize, /*const */byte* returnCode) => ((delegate*<ulong, ulong, /*const */uint*, int, /*const */byte*, uint>)pointers[165])(serverConnectionHandlerID, channelID, permissionIDArray, arraySize, returnCode);
+    public uint requestChannelPermList(ulong serverConnectionHandlerID, ulong channelID, /*const */byte* returnCode) => ((delegate*<ulong, ulong, /*const */byte*, uint>)pointers[166])(serverConnectionHandlerID, channelID, returnCode);
+    public uint requestClientAddPerm(ulong serverConnectionHandlerID, ulong clientDatabaseID, /*const */uint* permissionIDArray, /*const */int* permissionValueArray, /*const */int* permissionSkipArray, int arraySize, /*const */byte* returnCode) => ((delegate*<ulong, ulong, /*const */uint*, /*const */int*, /*const */int*, int, /*const */byte*, uint>)pointers[167])(serverConnectionHandlerID, clientDatabaseID, permissionIDArray, permissionValueArray, permissionSkipArray, arraySize, returnCode);
+    public uint requestClientDelPerm(ulong serverConnectionHandlerID, ulong clientDatabaseID, /*const */uint* permissionIDArray, int arraySize, /*const */byte* returnCode) => ((delegate*<ulong, ulong, /*const */uint*, int, /*const */byte*, uint>)pointers[168])(serverConnectionHandlerID, clientDatabaseID, permissionIDArray, arraySize, returnCode);
+    public uint requestClientPermList(ulong serverConnectionHandlerID, ulong clientDatabaseID, /*const */byte* returnCode) => ((delegate*<ulong, ulong, /*const */byte*, uint>)pointers[169])(serverConnectionHandlerID, clientDatabaseID, returnCode);
+    public uint requestChannelClientAddPerm(ulong serverConnectionHandlerID, ulong channelID, ulong clientDatabaseID, /*const */uint* permissionIDArray, /*const */int* permissionValueArray, int arraySize, /*const */byte* returnCode) => ((delegate*<ulong, ulong, ulong, /*const */uint*, /*const */int*, int, /*const */byte*, uint>)pointers[170])(serverConnectionHandlerID, channelID, clientDatabaseID, permissionIDArray, permissionValueArray, arraySize, returnCode);
+    public uint requestChannelClientDelPerm(ulong serverConnectionHandlerID, ulong channelID, ulong clientDatabaseID, /*const */uint* permissionIDArray, int arraySize, /*const */byte* returnCode) => ((delegate*<ulong, ulong, ulong, /*const */uint*, int, /*const */byte*, uint>)pointers[171])(serverConnectionHandlerID, channelID, clientDatabaseID, permissionIDArray, arraySize, returnCode);
+    public uint requestChannelClientPermList(ulong serverConnectionHandlerID, ulong channelID, ulong clientDatabaseID, /*const */byte* returnCode) => ((delegate*<ulong, ulong, ulong, /*const */byte*, uint>)pointers[172])(serverConnectionHandlerID, channelID, clientDatabaseID, returnCode);
+    public uint privilegeKeyUse(ulong serverConnectionHandler, /*const */byte* tokenKey, /*const */byte* returnCode) => ((delegate*<ulong, /*const */byte*, /*const */byte*, uint>)pointers[173])(serverConnectionHandler, tokenKey, returnCode);
+    public uint requestPermissionList(ulong serverConnectionHandler, /*const */byte* returnCode) => ((delegate*<ulong, /*const */byte*, uint>)pointers[174])(serverConnectionHandler, returnCode);
+    public uint requestPermissionOverview(ulong serverConnectionHandler, ulong clientDBID, ulong channelID, /*const */byte* returnCode) => ((delegate*<ulong, ulong, ulong, /*const */byte*, uint>)pointers[175])(serverConnectionHandler, clientDBID, channelID, returnCode);
 
     /* Helper Functions */
-    public delegate*</*const */byte* /*clientPropertyString*/, nint* /*resultFlag*/, uint> clientPropertyStringToFlag;
-    public delegate*</*const */byte* /*channelPropertyString*/, nint* /*resultFlag*/, uint> channelPropertyStringToFlag;
-    public delegate*</*const */byte* /*serverPropertyString*/, nint* /*resultFlag*/, uint> serverPropertyStringToFlag;
+    public uint clientPropertyStringToFlag(/*const */byte* clientPropertyString, nint* resultFlag) => ((delegate*</*const */byte*, nint*, uint>)pointers[176])(clientPropertyString, resultFlag);
+    public uint channelPropertyStringToFlag(/*const */byte* channelPropertyString, nint* resultFlag) => ((delegate*</*const */byte*, nint*, uint>)pointers[177])(channelPropertyString, resultFlag);
+    public uint serverPropertyStringToFlag(/*const */byte* serverPropertyString, nint* resultFlag) => ((delegate*</*const */byte*, nint*, uint>)pointers[178])(serverPropertyString, resultFlag);
 
     /* Client functions */
-    public delegate*<byte* /*path*/, nint /*maxLen*/, void> getAppPath;
-    public delegate*<byte* /*path*/, nint /*maxLen*/, void> getResourcesPath;
-    public delegate*<byte* /*path*/, nint /*maxLen*/, void> getConfigPath;
-    public delegate*<byte* /*path*/, nint /*maxLen*/, /*const */byte* /*pluginID*/, void> getPluginPath;
-    public delegate*<ulong> getCurrentServerConnectionHandlerID;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*message*/, PluginMessageTarget /*messageTarget*/, void> printMessage;
-    public delegate*</*const */byte* /*message*/, void> printMessageToCurrentTab;
-    public delegate*</*const */byte* /*text*/, byte* /*result*/, nint /*maxLen*/, void> urlsToBB;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*pluginID*/, /*const */byte* /*command*/, int /*targetMode*/, /*const */anyID* /*targetIDs*/, /*const */byte* /*returnCode*/, void> sendPluginCommand;
-    public delegate*</*const */byte* /*path*/, byte* /*result*/, nint /*maxLen*/, void> getDirectories;
-    public delegate*<ulong /*scHandlerID*/, byte* /*host*/, ushort* /*port*/, byte* /*password*/, nint /*maxLen*/, uint> getServerConnectInfo;
-    public delegate*<ulong /*scHandlerID*/, ulong /*channelID*/, byte* /*path*/, byte* /*password*/, nint /*maxLen*/, uint> getChannelConnectInfo;
-    public delegate*</*const */byte* /*pluginID*/, byte* /*returnCode*/, nint /*maxLen*/, void> createReturnCode;
-    public delegate*<ulong /*scHandlerID*/, PluginItemType /*itemType*/, ulong /*itemID*/, uint> requestInfoUpdate;
-    public delegate*<ulong /*scHandlerID*/, ulong> getServerVersion;
-    public delegate*<ulong /*scHandlerID*/, anyID /*clientID*/, int* /*result*/, uint> isWhispering;
-    public delegate*<ulong /*scHandlerID*/, anyID /*clientID*/, int* /*result*/, uint> isReceivingWhisper;
-    public delegate*<ulong /*scHandlerID*/, anyID /*clientID*/, byte* /*result*/, nint /*maxLen*/, uint> getAvatar;
-    public delegate*</*const */byte* /*pluginID*/, int /*menuID*/, int /*enabled*/, void> setPluginMenuEnabled;
-    public delegate*<void> showHotkeySetup;
-    public delegate*</*const */byte* /*pluginID*/, /*const */byte* /*keyword*/, int /*isDown*/, void* /*qParentWindow*/, void> requestHotkeyInputDialog;
-    public delegate*</*const */byte* /*pluginID*/, /*const */byte** /*keywords*/, byte** /*hotkeys*/, nint /*arrayLen*/, nint /*hotkeyBufSize*/, uint> getHotkeyFromKeyword;
-    public delegate*<ulong /*scHandlerID*/, anyID /*clientID*/, byte* /*result*/, nint /*maxLen*/, uint> getClientDisplayName;
-    public delegate*<PluginBookmarkList** /*list*/, uint> getBookmarkList;
-    public delegate*<PluginGuiProfile /*profile*/, int* /*defaultProfileIdx*/, byte*** /*result*/, uint> getProfileList;
-    public delegate*<PluginConnectTab /*connectTab*/, /*const */byte* /*serverLabel*/, /*const */byte* /*serverAddress*/, /*const */byte* /*serverPassword*/, /*const */byte* /*nickname*/, /*const */byte* /*channel*/, /*const */byte* /*channelPassword*/, /*const */byte* /*captureProfile*/, /*const */byte* /*playbackProfile*/, /*const */byte* /*hotkeyProfile*/, /*const */byte* /*soundProfile*/, /*const */byte* /*userIdentity*/, /*const */byte* /*oneTimeKey*/, /*const */byte* /*phoneticName*/, ulong* /*scHandlerID*/, uint> guiConnect;
-    public delegate*<PluginConnectTab /*connectTab*/, /*const */byte* /*bookmarkuuid*/, ulong* /*scHandlerID*/, uint> guiConnectBookmark;
-    public delegate*</*const */byte* /*bookmarkuuid*/, /*const */byte* /*serverLabel*/, /*const */byte* /*serverAddress*/, /*const */byte* /*serverPassword*/, /*const */byte* /*nickname*/, /*const */byte* /*channel*/, /*const */byte* /*channelPassword*/, /*const */byte* /*captureProfile*/, /*const */byte* /*playbackProfile*/, /*const */byte* /*hotkeyProfile*/, /*const */byte* /*soundProfile*/, /*const */byte* /*uniqueUserId*/, /*const */byte* /*oneTimeKey*/, /*const */byte* /*phoneticName*/, uint> createBookmark;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*permissionName*/, uint* /*result*/, uint> getPermissionIDByName;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*permissionName*/, int* /*result*/, uint> getClientNeededPermission;
-    public delegate*</*const */byte* /*pluginID*/, /*const */byte* /*keyIdentifier*/, int /*up_down*/, void> notifyKeyEvent;
+    public void getAppPath(byte* path, nint maxLen) => ((delegate*<byte*, nint, void>)pointers[179])(path, maxLen);
+    public void getResourcesPath(byte* path, nint maxLen) => ((delegate*<byte*, nint, void>)pointers[180])(path, maxLen);
+    public void getConfigPath(byte* path, nint maxLen) => ((delegate*<byte*, nint, void>)pointers[181])(path, maxLen);
+    public void getPluginPath(byte* path, nint maxLen, /*const */byte* pluginID) => ((delegate*<byte*, nint, /*const */byte*, void>)pointers[182])(path, maxLen, pluginID);
+    public ulong getCurrentServerConnectionHandlerID() => ((delegate*<ulong>)pointers[183])();
+    public void printMessage(ulong serverConnectionHandlerID, /*const */byte* message, PluginMessageTarget messageTarget) => ((delegate*<ulong, /*const */byte*, PluginMessageTarget, void>)pointers[184])(serverConnectionHandlerID, message, messageTarget);
+    public void printMessageToCurrentTab(/*const */byte* message) => ((delegate*</*const */byte*, void>)pointers[185])(message);
+    public void urlsToBB(/*const */byte* text, byte* result, nint maxLen) => ((delegate*</*const */byte*, byte*, nint, void>)pointers[186])(text, result, maxLen);
+    public void sendPluginCommand(ulong serverConnectionHandlerID, /*const */byte* pluginID, /*const */byte* command, int targetMode, /*const */anyID* targetIDs, /*const */byte* returnCode) => ((delegate*<ulong, /*const */byte*, /*const */byte*, int, /*const */anyID*, /*const */byte*, void>)pointers[187])(serverConnectionHandlerID, pluginID, command, targetMode, targetIDs, returnCode);
+    public void getDirectories(/*const */byte* path, byte* result, nint maxLen) => ((delegate*</*const */byte*, byte*, nint, void>)pointers[188])(path, result, maxLen);
+    public uint getServerConnectInfo(ulong scHandlerID, byte* host, ushort* port, byte* password, nint maxLen) => ((delegate*<ulong, byte*, ushort*, byte*, nint, uint>)pointers[189])(scHandlerID, host, port, password, maxLen);
+    public uint getChannelConnectInfo(ulong scHandlerID, ulong channelID, byte* path, byte* password, nint maxLen) => ((delegate*<ulong, ulong, byte*, byte*, nint, uint>)pointers[190])(scHandlerID, channelID, path, password, maxLen);
+    public void createReturnCode(/*const */byte* pluginID, byte* returnCode, nint maxLen) => ((delegate*</*const */byte*, byte*, nint, void>)pointers[191])(pluginID, returnCode, maxLen);
+    public uint requestInfoUpdate(ulong scHandlerID, PluginItemType itemType, ulong itemID) => ((delegate*<ulong, PluginItemType, ulong, uint>)pointers[192])(scHandlerID, itemType, itemID);
+    public ulong getServerVersion(ulong scHandlerID) => ((delegate*<ulong, ulong>)pointers[193])(scHandlerID);
+    public uint isWhispering(ulong scHandlerID, anyID clientID, int* result) => ((delegate*<ulong, anyID, int*, uint>)pointers[194])(scHandlerID, clientID, result);
+    public uint isReceivingWhisper(ulong scHandlerID, anyID clientID, int* result) => ((delegate*<ulong, anyID, int*, uint>)pointers[195])(scHandlerID, clientID, result);
+    public uint getAvatar(ulong scHandlerID, anyID clientID, byte* result, nint maxLen) => ((delegate*<ulong, anyID, byte*, nint, uint>)pointers[196])(scHandlerID, clientID, result, maxLen);
+    public void setPluginMenuEnabled(/*const */byte* pluginID, int menuID, int enabled) => ((delegate*</*const */byte*, int, int, void>)pointers[197])(pluginID, menuID, enabled);
+    public void showHotkeySetup() => ((delegate*<void>)pointers[198])();
+    public void requestHotkeyInputDialog(/*const */byte* pluginID, /*const */byte* keyword, int isDown, void* qParentWindow) => ((delegate*</*const */byte*, /*const */byte*, int, void*, void>)pointers[199])(pluginID, keyword, isDown, qParentWindow);
+    public uint getHotkeyFromKeyword(/*const */byte* pluginID, /*const */byte** keywords, byte** hotkeys, nint arrayLen, nint hotkeyBufSize) => ((delegate*</*const */byte*, /*const */byte**, byte**, nint, nint, uint>)pointers[200])(pluginID, keywords, hotkeys, arrayLen, hotkeyBufSize);
+    public uint getClientDisplayName(ulong scHandlerID, anyID clientID, byte* result, nint maxLen) => ((delegate*<ulong, anyID, byte*, nint, uint>)pointers[201])(scHandlerID, clientID, result, maxLen);
+    public uint getBookmarkList(PluginBookmarkList** list) => ((delegate*<PluginBookmarkList**, uint>)pointers[202])(list);
+    public uint getProfileList(PluginGuiProfile profile, int* defaultProfileIdx, byte*** result) => ((delegate*<PluginGuiProfile, int*, byte***, uint>)pointers[203])(profile, defaultProfileIdx, result);
+    public uint guiConnect(PluginConnectTab connectTab, /*const */byte* serverLabel, /*const */byte* serverAddress, /*const */byte* serverPassword, /*const */byte* nickname, /*const */byte* channel, /*const */byte* channelPassword, /*const */byte* captureProfile, /*const */byte* playbackProfile, /*const */byte* hotkeyProfile, /*const */byte* soundProfile, /*const */byte* userIdentity, /*const */byte* oneTimeKey, /*const */byte* phoneticName, ulong* scHandlerID) => ((delegate*<PluginConnectTab, /*const */byte*, /*const */byte*, /*const */byte*, /*const */byte*, /*const */byte*, /*const */byte*, /*const */byte*, /*const */byte*, /*const */byte*, /*const */byte*, /*const */byte*, /*const */byte*, /*const */byte*, ulong*, uint>)pointers[204])(connectTab, serverLabel, serverAddress, serverPassword, nickname, channel, channelPassword, captureProfile, playbackProfile, hotkeyProfile, soundProfile, userIdentity, oneTimeKey, phoneticName, scHandlerID);
+    public uint guiConnectBookmark(PluginConnectTab connectTab, /*const */byte* bookmarkuuid, ulong* scHandlerID) => ((delegate*<PluginConnectTab, /*const */byte*, ulong*, uint>)pointers[205])(connectTab, bookmarkuuid, scHandlerID);
+    public uint createBookmark(/*const */byte* bookmarkuuid, /*const */byte* serverLabel, /*const */byte* serverAddress, /*const */byte* serverPassword, /*const */byte* nickname, /*const */byte* channel, /*const */byte* channelPassword, /*const */byte* captureProfile, /*const */byte* playbackProfile, /*const */byte* hotkeyProfile, /*const */byte* soundProfile, /*const */byte* uniqueUserId, /*const */byte* oneTimeKey, /*const */byte* phoneticName) => ((delegate*</*const */byte*, /*const */byte*, /*const */byte*, /*const */byte*, /*const */byte*, /*const */byte*, /*const */byte*, /*const */byte*, /*const */byte*, /*const */byte*, /*const */byte*, /*const */byte*, /*const */byte*, /*const */byte*, uint>)pointers[206])(bookmarkuuid, serverLabel, serverAddress, serverPassword, nickname, channel, channelPassword, captureProfile, playbackProfile, hotkeyProfile, soundProfile, uniqueUserId, oneTimeKey, phoneticName);
+    public uint getPermissionIDByName(ulong serverConnectionHandlerID, /*const */byte* permissionName, uint* result) => ((delegate*<ulong, /*const */byte*, uint*, uint>)pointers[207])(serverConnectionHandlerID, permissionName, result);
+    public uint getClientNeededPermission(ulong serverConnectionHandlerID, /*const */byte* permissionName, int* result) => ((delegate*<ulong, /*const */byte*, int*, uint>)pointers[208])(serverConnectionHandlerID, permissionName, result);
+    public void notifyKeyEvent(/*const */byte* pluginID, /*const */byte* keyIdentifier, int up_down) => ((delegate*</*const */byte*, /*const */byte*, int, void>)pointers[209])(pluginID, keyIdentifier, up_down);
 
     /* Single-Track/Multi-Track recording */
-    public delegate*<ulong /*serverConnectionHandlerID*/, int /*multitrack*/, int /*noFileSelector*/, /*const */byte* /*path*/, uint> startRecording;
-    public delegate*<ulong /*serverConnectionHandlerID*/, uint> stopRecording;
+    public uint startRecording(ulong serverConnectionHandlerID, int multitrack, int noFileSelector, /*const */byte* path) => ((delegate*<ulong, int, int, /*const */byte*, uint>)pointers[210])(serverConnectionHandlerID, multitrack, noFileSelector, path);
+    public uint stopRecording(ulong serverConnectionHandlerID) => ((delegate*<ulong, uint>)pointers[211])(serverConnectionHandlerID);
 
     /* Convenience functions */
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */anyID* /*clientIDArray*/, ulong /*newChannelID*/, /*const */byte* /*password*/, /*const */byte* /*returnCode*/, uint> requestClientsMove;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */anyID* /*clientIDArray*/, /*const */byte* /*kickReason*/, /*const */byte* /*returnCode*/, uint> requestClientsKickFromChannel;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */anyID* /*clientIDArray*/, /*const */byte* /*kickReason*/, /*const */byte* /*returnCode*/, uint> requestClientsKickFromServer;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */anyID* /*clientIDArray*/, /*const */byte* /*returnCode*/, uint> requestMuteClientsTemporary;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */anyID* /*clientIDArray*/, /*const */byte* /*returnCode*/, uint> requestUnmuteClientsTemporary;
-    public delegate*<ulong /*scHandlerID*/, uint /*permissionID*/, byte* /*result*/, nint /*max_len*/, uint> getPermissionNameByID;
-    public delegate*<nint /*clientPropertyFlag*/, byte** /*resultString*/, uint> clientPropertyFlagToString;
-    public delegate*<nint /*channelPropertyFlag*/, byte** /*resultString*/, uint> channelPropertyFlagToString;
-    public delegate*<nint /*serverPropertyFlag*/, byte** /*resultString*/, uint> serverPropertyFlagToString;
+    public uint requestClientsMove(ulong serverConnectionHandlerID, /*const */anyID* clientIDArray, ulong newChannelID, /*const */byte* password, /*const */byte* returnCode) => ((delegate*<ulong, /*const */anyID*, ulong, /*const */byte*, /*const */byte*, uint>)pointers[212])(serverConnectionHandlerID, clientIDArray, newChannelID, password, returnCode);
+    public uint requestClientsKickFromChannel(ulong serverConnectionHandlerID, /*const */anyID* clientIDArray, /*const */byte* kickReason, /*const */byte* returnCode) => ((delegate*<ulong, /*const */anyID*, /*const */byte*, /*const */byte*, uint>)pointers[213])(serverConnectionHandlerID, clientIDArray, kickReason, returnCode);
+    public uint requestClientsKickFromServer(ulong serverConnectionHandlerID, /*const */anyID* clientIDArray, /*const */byte* kickReason, /*const */byte* returnCode) => ((delegate*<ulong, /*const */anyID*, /*const */byte*, /*const */byte*, uint>)pointers[214])(serverConnectionHandlerID, clientIDArray, kickReason, returnCode);
+    public uint requestMuteClientsTemporary(ulong serverConnectionHandlerID, /*const */anyID* clientIDArray, /*const */byte* returnCode) => ((delegate*<ulong, /*const */anyID*, /*const */byte*, uint>)pointers[215])(serverConnectionHandlerID, clientIDArray, returnCode);
+    public uint requestUnmuteClientsTemporary(ulong serverConnectionHandlerID, /*const */anyID* clientIDArray, /*const */byte* returnCode) => ((delegate*<ulong, /*const */anyID*, /*const */byte*, uint>)pointers[216])(serverConnectionHandlerID, clientIDArray, returnCode);
+    public uint getPermissionNameByID(ulong scHandlerID, uint permissionID, byte* result, nint max_len) => ((delegate*<ulong, uint, byte*, nint, uint>)pointers[217])(scHandlerID, permissionID, result, max_len);
+    public uint clientPropertyFlagToString(nint clientPropertyFlag, byte** resultString) => ((delegate*<nint, byte**, uint>)pointers[218])(clientPropertyFlag, resultString);
+    public uint channelPropertyFlagToString(nint channelPropertyFlag, byte** resultString) => ((delegate*<nint, byte**, uint>)pointers[219])(channelPropertyFlag, resultString);
+    public uint serverPropertyFlagToString(nint serverPropertyFlag, byte** resultString) => ((delegate*<nint, byte**, uint>)pointers[220])(serverPropertyFlag, resultString);
 
     /* Server editing */
-    public delegate*<ulong /*serverConnectionHandlerID*/, nint /*flag*/, int /*value*/, uint> setServerVariableAsInt;
-    public delegate*<ulong /*serverConnectionHandlerID*/, nint /*flag*/, ulong /*value*/, uint> setServerVariableAsulong;
-    public delegate*<ulong /*serverConnectionHandlerID*/, nint /*flag*/, double /*value*/, uint> setServerVariableAsDouble;
-    public delegate*<ulong /*serverConnectionHandlerID*/, nint /*flag*/, /*const */byte* /*value*/, uint> setServerVariableAsString;
-    public delegate*<ulong /*serverConnectionHandlerID*/, /*const */byte* /*returnCode*/, uint> flushServerUpdates;
+    public uint setServerVariableAsInt(ulong serverConnectionHandlerID, nint flag, int value) => ((delegate*<ulong, nint, int, uint>)pointers[221])(serverConnectionHandlerID, flag, value);
+    public uint setServerVariableAsulong(ulong serverConnectionHandlerID, nint flag, ulong value) => ((delegate*<ulong, nint, ulong, uint>)pointers[222])(serverConnectionHandlerID, flag, value);
+    public uint setServerVariableAsDouble(ulong serverConnectionHandlerID, nint flag, double value) => ((delegate*<ulong, nint, double, uint>)pointers[223])(serverConnectionHandlerID, flag, value);
+    public uint setServerVariableAsString(ulong serverConnectionHandlerID, nint flag, /*const */byte* value) => ((delegate*<ulong, nint, /*const */byte*, uint>)pointers[224])(serverConnectionHandlerID, flag, value);
+    public uint flushServerUpdates(ulong serverConnectionHandlerID, /*const */byte* returnCode) => ((delegate*<ulong, /*const */byte*, uint>)pointers[225])(serverConnectionHandlerID, returnCode);
+#pragma warning restore IDE1006 // Naming Styles
 }
 
 #region public_definitions.h
@@ -352,12 +357,23 @@ public enum LogTypes
 
 public enum LogLevel
 {
-    LogLevel_CRITICAL = 0, //these messages stop the program
-    LogLevel_ERROR,        //everything that is really bad, but not so bad we need to shut down
-    LogLevel_WARNING,      //everything that *might* be bad
-    LogLevel_DEBUG,        //output that might help find a problem
-    LogLevel_INFO,         //informational output, like "starting database version x.y.z"
-    LogLevel_DEVEL         //developer only output (will not be displayed in release mode)
+    /// <summary>These messages stop the program.</summary>
+    LogLevel_CRITICAL = 0,
+
+    /// <summary>Everything that is really bad, but not so bad we need to shut down.</summary>
+    LogLevel_ERROR,
+
+    /// <summary>Everything that *might* be bad.</summary>
+    LogLevel_WARNING,
+
+    /// <summary>Output that might help find a problem.</summary>
+    LogLevel_DEBUG,
+
+    /// <summary>Informational output, like "starting database version x.y.z".</summary>
+    LogLevel_INFO,
+
+    /// <summary>Developer only output (will not be displayed in release mode).</summary>
+    LogLevel_DEVEL
 }
 
 #endregion
