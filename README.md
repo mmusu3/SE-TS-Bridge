@@ -11,11 +11,12 @@ There are two plugins. One for Space Engineers (SE) and one for TeamSpeak (TS). 
 Be sure not to mix them up.
 
 #### Space Engineers Plugin
-To install the SE plugin first locaate your Space Engineers install folder.
+First you will need to unblock the `SE-TS_Plugin.dll` file from the file properties in order for it to work.
+To install the SE plugin first locate your Space Engineers install folder.
 The install folder is usually of the form `C:/Program Files (x86)/Steam/steamapps/common/SpaceEngineers/Bin64`. It may be different on your computer.
 Inside that folder you may want to add a `Plugins` folder for better organization. Now copy the `SE-TS_Plugin.dll` file into the `Plugins` folder.
 To use the plugin you will need to change the launch options in the Space Engineers game properties page in Steam.
-If you are not using any other plugins sinply add `-plugin ./Plugins/SE-TS Plugin.dll` to the launch options box.
+If you are not using any other plugins sinply add `-plugin ./Plugins/SE-TS_Plugin.dll` to the launch options box.
 If you are using other plugins add `./Plugins/SE-TS_Plugin.dll` after the previous plugins paths. Eg. `-plugin ./Plugins/otherplugin.dll ./Plugins/SE-TS_Plugin.dll`
 If SE is already running you will need to restart it.
 
