@@ -278,7 +278,7 @@ public static class Plugin
             {
                 client.Position = state.Position;
 
-                if (localClientId != 0 && client.ClientID != 0)
+                if (localClientId != 0)
                     SetClientPos(client, state.Position);
                 //else
                 //    Console.WriteLine($"TS-SE Plugin - Missing client ID for SteamID: {state.SteamID}");
@@ -518,6 +518,9 @@ public static class Plugin
 
     unsafe static void SetClientPos(Client client, TS3_VECTOR position)
     {
+        if (client.ClientID == 0)
+            return;
+
         //Console.WriteLine($"TS-SE Plugin - Setting position of client {client.ClientID} to {{{position.x}, {position.y}, {position.z}}}.");
 
         position.z = -position.z;
