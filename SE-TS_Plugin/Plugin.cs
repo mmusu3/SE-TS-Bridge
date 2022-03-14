@@ -164,8 +164,8 @@ public class Plugin : IPlugin
         {
             if (connectResult == null)
             {
-                MyLog.Default.WriteLine("[SE-TS Bridge] Restarting SE-TS connection.");
-                MyAPIGateway.Utilities?.ShowMessage("SE-TS Bridge", "Restarting SE-TS connection.");
+                MyLog.Default.WriteLine("[SE-TS Bridge] Restarting connection.");
+                MyAPIGateway.Utilities?.ShowMessage("SE-TS Bridge", "Restarting connection.");
 
                 pipeStream.Dispose();
                 currentPlayers.Clear();

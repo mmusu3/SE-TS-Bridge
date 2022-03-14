@@ -22,6 +22,9 @@ public static class Plugin
     static readonly string PluginDescription = "This plugin integrates with Space Engineers to enable positional audio.";
     static readonly IntPtr PluginDescriptionPtr = Marshal.StringToHGlobalAnsi(PluginDescription);
 
+    //static readonly string CommandKeyword = "setsbridge";
+    //static readonly IntPtr CommandKeywordPtr = Marshal.StringToHGlobalAnsi(CommandKeyword);
+
     static TS3Functions functions;
     unsafe static byte* pluginID = null;
 
@@ -111,7 +114,7 @@ public static class Plugin
             return;
 
         SendMessageToClient(localClientId, "TS-SE Plugin - Established connection to Space Engineers plugin.");
-        Set3DSettings(1, 1); // Set default scales
+        Set3DSettings(distanceFactor: 0.5f, 1); // Better feeling distance scale
 
         while (pipeStream.IsConnected && !cancellationToken.IsCancellationRequested)
         {
@@ -300,6 +303,7 @@ public static class Plugin
             {
                 ulong id = Read<ulong>(ref bytes);
 
+                // TODO: Need faster ID based lookup
                 for (int j = 0; j < gameClients.Count; j++)
                 {
                     var client = gameClients[j];
@@ -334,7 +338,7 @@ public static class Plugin
 
             if (client != null)
             {
-                Console.WriteLine($"TS-SE Plugin - Pairing Steam ID with existing client. SteamId: {id}, ClientId: {client.ClientID}, SteamName:{name}");
+                Console.WriteLine($"TS-SE Plugin - Pairing Steam ID with existing client. SteamId: {id}, ClientId: {client.ClientID}, SteamName: {name}");
             }
             else
             {
@@ -459,7 +463,7 @@ public static class Plugin
         if (client != null)
         {
             client.ClientID = id;
-            Console.WriteLine($"TS-SE Plugin - Pairing client ID with existing Steam ID. SteamId: {id}, ClientId: {client.ClientID}, ClientName:{name}");
+            Console.WriteLine($"TS-SE Plugin - Pairing client ID with existing Steam ID. SteamId: {id}, ClientId: {client.ClientID}, ClientName: {name}");
         }
         else
         {
@@ -705,6 +709,12 @@ public static class Plugin
     #endregion
 
     #region Optional functions
+
+    //[UnmanagedCallersOnly(EntryPoint = "ts3plugin_commandKeyword")]
+    //public unsafe static byte* ts3plugin_commandKeyword()
+    //{
+    //    return (byte*)CommandKeywordPtr;
+    //}
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_currentServerConnectionChanged")]
     public unsafe static void ts3plugin_currentServerConnectionChanged(ulong serverConnectionHandlerID)
