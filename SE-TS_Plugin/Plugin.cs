@@ -203,7 +203,7 @@ public class Plugin : IPlugin
         {
             var item = currentPlayers[i];
 
-            if (item.InternalPlayer != null && !tempPlayers.Contains(item.InternalPlayer))
+            if (item.InternalPlayer != null && !PlayerExists(tempPlayers, item.InternalPlayer))
             {
                 removedPlayers.Add(item);
                 currentPlayers.RemoveAt(i--);
@@ -212,7 +212,7 @@ public class Plugin : IPlugin
 
         foreach (var item in tempPlayers)
         {
-            if (item != localPlayer && currentPlayers.FindIndex(p => p == item) == -1)
+            if (item != localPlayer && currentPlayers.FindIndex(p => p.SteamID == item.SteamUserId) == -1)
             {
                 var pos = item.GetPosition();
 
@@ -375,5 +375,16 @@ public class Plugin : IPlugin
     {
         MemoryMarshal.Write(span, ref Unsafe.AsRef(in value));
         span = span.Slice(sizeof(T));
+    }
+
+    static bool PlayerExists(List<IMyPlayer> players, IMyPlayer player)
+    {
+        foreach (var item in players)
+        {
+            if (item.SteamUserId == player.SteamUserId)
+                return true;
+        }
+
+        return false;
     }
 }
