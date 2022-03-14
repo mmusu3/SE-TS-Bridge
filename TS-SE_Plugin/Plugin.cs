@@ -111,6 +111,7 @@ public static class Plugin
             return;
 
         SendMessageToClient(localClientId, "TS-SE Plugin - Established connection to Space Engineers plugin.");
+        Set3DSettings(1, 1); // Set default scales
 
         while (pipeStream.IsConnected && !cancellationToken.IsCancellationRequested)
         {
@@ -491,6 +492,16 @@ public static class Plugin
 
         client.ClientID = 0;
         client.ClientName = null;
+    }
+
+    static void Set3DSettings(float distanceFactor = 1, float rolloffScale = 1)
+    {
+        Console.WriteLine($"TS-SE Plugin - Setting system 3D settings. DistanceFactor: {distanceFactor}, RolloffScale: {rolloffScale}.");
+
+        var err = (Ts3ErrorType)functions.systemset3DSettings(connHandlerId, distanceFactor, rolloffScale);
+
+        if (err != Ts3ErrorType.ERROR_ok)
+            Console.WriteLine($"TS-SE Plugin - Failed to set system 3D settings. Error: {err}");
     }
 
     unsafe static void SetListener(TS3_VECTOR forward, TS3_VECTOR up)
