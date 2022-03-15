@@ -212,21 +212,21 @@ public class Plugin : IPlugin
 
         foreach (var item in tempPlayers)
         {
-            if (item != localPlayer && currentPlayers.FindIndex(p => p.SteamID == item.SteamUserId) == -1)
-            {
-                var pos = item.GetPosition();
+            if (item == localPlayer || PlayerExists(currentPlayers, item))
+                continue;
 
-                if (item.Character != null)
-                    // Add approximate head height
-                    pos += Vector3.Transform(new Vector3(0, 1.7f, 0), item.Character.WorldMatrix.GetOrientation());
+            var pos = item.GetPosition();
 
-                newPlayers.Add(new Player {
-                    InternalPlayer = item,
-                    SteamID = item.SteamUserId,
-                    DisplayName = item.DisplayName,
-                    Position = pos
-                });
-            }
+            if (item.Character != null)
+                // Add approximate head height
+                pos += Vector3.Transform(new Vector3(0, 1.7f, 0), item.Character.WorldMatrix.GetOrientation());
+
+            newPlayers.Add(new Player {
+                InternalPlayer = item,
+                SteamID = item.SteamUserId,
+                DisplayName = item.DisplayName,
+                Position = pos
+            });
         }
 
         tempPlayers.Clear();
@@ -382,6 +382,17 @@ public class Plugin : IPlugin
         foreach (var item in players)
         {
             if (item.SteamUserId == player.SteamUserId)
+                return true;
+        }
+
+        return false;
+    }
+
+    static bool PlayerExists(List<Player> players, IMyPlayer player)
+    {
+        foreach (Player item in players)
+        {
+            if (item.SteamID == player.SteamUserId)
                 return true;
         }
 

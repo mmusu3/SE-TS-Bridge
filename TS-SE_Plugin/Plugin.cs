@@ -11,19 +11,16 @@ namespace TSSEPlugin;
 public static class Plugin
 {
     static readonly string PluginName = "TS-SE Plugin";
-    static readonly IntPtr PluginNamePtr = Marshal.StringToHGlobalAnsi(PluginName);
+    static readonly IntPtr PluginNamePtr = StringToHGlobalUTF8(PluginName);
 
-    static readonly string PluginVersion = "1.0";
-    static readonly IntPtr PluginVersionPtr = Marshal.StringToHGlobalAnsi(PluginVersion);
+    static readonly string PluginVersion = "1.0.4";
+    static readonly IntPtr PluginVersionPtr = StringToHGlobalUTF8(PluginVersion);
 
     static readonly string PluginAuthor = "Remaarn";
-    static readonly IntPtr PluginAuthorPtr = Marshal.StringToHGlobalAnsi(PluginAuthor);
+    static readonly IntPtr PluginAuthorPtr = StringToHGlobalUTF8(PluginAuthor);
 
     static readonly string PluginDescription = "This plugin integrates with Space Engineers to enable positional audio.";
-    static readonly IntPtr PluginDescriptionPtr = Marshal.StringToHGlobalAnsi(PluginDescription);
-
-    //static readonly string CommandKeyword = "setsbridge";
-    //static readonly IntPtr CommandKeywordPtr = Marshal.StringToHGlobalAnsi(CommandKeyword);
+    static readonly IntPtr PluginDescriptionPtr = StringToHGlobalUTF8(PluginDescription);
 
     static TS3Functions functions;
     unsafe static byte* pluginID = null;
@@ -53,6 +50,25 @@ public static class Plugin
     static readonly List<Client> tsClients = new();
 
     static readonly MemoryPool<byte> memPool = MemoryPool<byte>.Shared;
+
+    static unsafe IntPtr StringToHGlobalUTF8(string? s)
+    {
+        if (s is null)
+            return IntPtr.Zero;
+
+        int nb = System.Text.Encoding.UTF8.GetMaxByteCount(s.Length);
+        IntPtr ptr = Marshal.AllocHGlobal(nb + 1);
+
+        int nbWritten;
+        byte* pbMem = (byte*)ptr;
+
+        fixed (char* firstChar = s)
+            nbWritten = System.Text.Encoding.UTF8.GetBytes(firstChar, s.Length, pbMem, nb);
+
+        pbMem[nbWritten] = 0;
+
+        return ptr;
+    }
 
     static void Init()
     {
@@ -114,7 +130,7 @@ public static class Plugin
             return;
 
         SendMessageToClient(localClientId, "TS-SE Plugin - Established connection to Space Engineers plugin.");
-        Set3DSettings(distanceFactor: 0.5f, 1); // Better feeling distance scale
+        Set3DSettings(distanceFactor: 0.3f, 1); // Better feeling distance scale
 
         while (pipeStream.IsConnected && !cancellationToken.IsCancellationRequested)
         {
@@ -283,11 +299,10 @@ public static class Plugin
 
                 if (localClientId != 0)
                     SetClientPos(client, state.Position);
-                //else
-                //    Console.WriteLine($"TS-SE Plugin - Missing client ID for SteamID: {state.SteamID}");
             }
             else
             {
+                // TODO: Add client without name
                 Console.WriteLine($"TS-SE Plugin - Missing game client for SteamID: {state.SteamID}");
             }
         }
@@ -446,15 +461,14 @@ public static class Plugin
         return client;
     }
 
-    static void AddClientThreadSafe(ushort id)
+    static void AddClientThreadSafe(ushort id, string? name)
     {
         lock (tsClients)
-            AddClient(id);
+            AddClient(id, name);
     }
 
-    static void AddClient(ushort id)
+    static void AddClient(ushort id, string? name)
     {
-        var name = GetClientName(id);
         Client? client = null;
 
         if (name != null)
@@ -498,6 +512,22 @@ public static class Plugin
         client.ClientName = null;
     }
 
+    static void MergeClients(Client tsClient, Client gameClient)
+    {
+        Console.WriteLine($"TS-SE Plugin - Merging clients by name. ClientName: {tsClient.ClientName} ClientId: {tsClient.ClientID}, SteamId: {gameClient.SteamID}");
+
+        tsClient.SteamID = gameClient.SteamID;
+        tsClient.SteamName = gameClient.SteamName;
+        tsClient.Position = gameClient.Position;
+        SetClientPos(tsClient, tsClient.Position);
+
+        lock (gameClients)
+        {
+            gameClients.Remove(gameClient);
+            gameClients.Add(tsClient);
+        }
+    }
+
     static void Set3DSettings(float distanceFactor = 1, float rolloffScale = 1)
     {
         Console.WriteLine($"TS-SE Plugin - Setting system 3D settings. DistanceFactor: {distanceFactor}, RolloffScale: {rolloffScale}.");
@@ -532,7 +562,7 @@ public static class Plugin
         var err = (Ts3ErrorType)functions.channelset3DAttributes(connHandlerId, client.ClientID, &position);
 
         if (err != Ts3ErrorType.ERROR_ok)
-            Console.WriteLine($"TS-SE Plugin - Failed to set client pos. Error: {err}");
+            Console.WriteLine($"TS-SE Plugin - Failed to set client pos to {{{position.x}, {position.y}, {position.z}}}. Error: {err}");
     }
 
     unsafe static void RefetchTSClients()
@@ -552,12 +582,15 @@ public static class Plugin
         {
             tsClients.Clear();
 
-            while (clientList[i] != 0)
-            {
-                if (clientList[i] != localClientId)
-                    AddClient(clientList[i]);
+            ushort id;
 
-                i++;
+            while ((id = clientList[i++]) != 0)
+            {
+                if (id != localClientId)
+                {
+                    var name = GetClientName(id);
+                    AddClient(id, name);
+                }
             }
 
             if (tsClients.Count != 0)
@@ -710,12 +743,6 @@ public static class Plugin
 
     #region Optional functions
 
-    //[UnmanagedCallersOnly(EntryPoint = "ts3plugin_commandKeyword")]
-    //public unsafe static byte* ts3plugin_commandKeyword()
-    //{
-    //    return (byte*)CommandKeywordPtr;
-    //}
-
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_currentServerConnectionChanged")]
     public unsafe static void ts3plugin_currentServerConnectionChanged(ulong serverConnectionHandlerID)
     {
@@ -764,12 +791,13 @@ public static class Plugin
 
             if (client != null)
             {
-                Console.WriteLine($"TS-SE Plugin - Client joined current channel but was already registered. ClientID: {clientID}, NewChannelID: {newChannelID}");
+                Console.WriteLine($"TS-SE Plugin - Client joined current channel but was already registered. ClientID: {clientID}, ClientName: {client.ClientName}, NewChannelID: {newChannelID}");
             }
             else
             {
-                Console.WriteLine($"TS-SE Plugin - Client joined current channel. ClientID: {clientID}, NewChannelID: {newChannelID}");
-                AddClientThreadSafe(clientID);
+                var name = GetClientName(clientID);
+                Console.WriteLine($"TS-SE Plugin - New client joined current channel. ClientID: {clientID}, ClientName: {name}, NewChannelID: {newChannelID}");
+                AddClientThreadSafe(clientID, name);
             }
         }
         else
@@ -778,13 +806,68 @@ public static class Plugin
 
             if (client != null)
             {
-                Console.WriteLine($"TS-SE Plugin - Client left current channel. ClientID: {clientID}, NewChannelID: {newChannelID}");
+                Console.WriteLine($"TS-SE Plugin - Client left current channel. ClientID: {clientID}, ClientName: {client.ClientName}, NewChannelID: {newChannelID}");
                 RemoveClientThreadSafe(client, newChannelID != 0);
             }
             else
             {
                 Console.WriteLine($"TS-SE Plugin - Unregisterd client left current channel. ClientID: {clientID}, OldChannelID: {oldChannelID}");
             }
+        }
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onClientDisplayNameChanged")]
+    public unsafe static void ts3plugin_onClientDisplayNameChanged(ulong serverConnectionHandlerID, ushort clientID, /*const */byte* displayName, /*const */byte* uniqueClientIdentifier)
+    {
+        if (clientID == localClientId)
+            return;
+
+        // TODO: Check serverConnectionHandlerID against current
+
+        var name = Marshal.PtrToStringUTF8((IntPtr)displayName);
+        var client = GetClientByClientId(clientID);
+
+        if (client != null)
+        {
+            client.ClientName = name;
+
+            var steamClient = name != null ? GetClientBySteamName(name) : null;
+
+            if (client.SteamID != 0)
+            {
+                if (steamClient != null)
+                {
+                    if (steamClient == client)
+                    {
+                        Console.WriteLine($"TS-SE Plugin - Client name changed but still matches Steam name. SteamId: {client.SteamID}, ClientId: {client.ClientID}, ClientName: {name}");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"TS-SE Plugin - Client name conflicts with existing Steam client name. SteamId: {steamClient.SteamID}, ClientId: {client.ClientID}, ClientName: {name}");
+                    }
+                }
+                else
+                {
+                    Console.WriteLine($"TS-SE Plugin - A paired clients name was changed without conflict. SteamId: {client.SteamID}, ClientId: {client.ClientID}, ClientName: {name}");
+                    // TODO: Unpair?
+                }
+            }
+            else // Not already paired
+            {
+                if (steamClient != null)
+                {
+                    MergeClients(client, steamClient);
+                }
+                else
+                {
+                    //Console.WriteLine($"TS-SE Plugin - Unpaired client changed display name. ClientId: {client.ClientID}, NewClientName: {client.ClientName}");
+                    // Nothing to do
+                }
+            }
+        }
+        else
+        {
+            Console.WriteLine($"TS-SE Plugin - Unregisterd client changed display name. ClientID: {clientID}");
         }
     }
 
