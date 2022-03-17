@@ -80,7 +80,7 @@ public static class Plugin
         {
             try
             {
-                serverConnectedTcs.SetCanceled(cancellationTokenSource.Token);
+                serverConnectedTcs?.SetCanceled(cancellationTokenSource.Token);
             }
             catch (InvalidOperationException)
             {
@@ -124,7 +124,10 @@ public static class Plugin
         Console.WriteLine("TS-SE Plugin - Established connection to Space Engineers plugin.");
 
         if (serverConnectedTcs != null)
+        {
             await serverConnectedTcs.Task.ConfigureAwait(false);
+            serverConnectedTcs = null;
+        }
 
         if (cancellationToken.IsCancellationRequested)
             return;
@@ -298,7 +301,7 @@ public static class Plugin
                 client.Position = state.Position;
 
                 if (localClientId != 0)
-                    SetClientPos(client, state.Position);
+                    SetClientPos(client.ClientID, state.Position);
             }
             else
             {
@@ -329,7 +332,7 @@ public static class Plugin
                     client.SteamID = 0;
                     client.SteamName = null;
                     client.Position = default;
-                    SetClientPos(client, default);
+                    SetClientPos(client.ClientID, default);
                     gameClients.RemoveAt(j);
                     break;
                 }
@@ -499,7 +502,7 @@ public static class Plugin
     static void RemoveClient(Client client, bool resetPos)
     {
         if (resetPos)
-            SetClientPos(client, default);
+            SetClientPos(client.ClientID, default);
 
         int index = tsClients.IndexOf(client);
 
@@ -519,7 +522,7 @@ public static class Plugin
         tsClient.SteamID = gameClient.SteamID;
         tsClient.SteamName = gameClient.SteamName;
         tsClient.Position = gameClient.Position;
-        SetClientPos(tsClient, tsClient.Position);
+        SetClientPos(tsClient.ClientID, tsClient.Position);
 
         lock (gameClients)
         {
@@ -550,16 +553,16 @@ public static class Plugin
             Console.WriteLine($"TS-SE Plugin - Failed to set listener attribs. Error: {err}");
     }
 
-    unsafe static void SetClientPos(Client client, TS3_VECTOR position)
+    unsafe static void SetClientPos(ushort clientId, TS3_VECTOR position)
     {
-        if (client.ClientID == 0)
+        if (clientId == 0)
             return;
 
-        //Console.WriteLine($"TS-SE Plugin - Setting position of client {client.ClientID} to {{{position.x}, {position.y}, {position.z}}}.");
+        //Console.WriteLine($"TS-SE Plugin - Setting position of client {clientId} to {{{position.x}, {position.y}, {position.z}}}.");
 
         position.z = -position.z;
 
-        var err = (Ts3ErrorType)functions.channelset3DAttributes(connHandlerId, client.ClientID, &position);
+        var err = (Ts3ErrorType)functions.channelset3DAttributes(connHandlerId, clientId, &position);
 
         if (err != Ts3ErrorType.ERROR_ok)
             Console.WriteLine($"TS-SE Plugin - Failed to set client pos to {{{position.x}, {position.y}, {position.z}}}. Error: {err}");
