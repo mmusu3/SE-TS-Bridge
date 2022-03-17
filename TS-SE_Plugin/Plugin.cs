@@ -44,6 +44,7 @@ public static class Plugin
         public string? SteamName;
         public string? ClientName;
         public TS3_VECTOR Position;
+        public bool IsWhispering;
     }
 
     static readonly List<Client> gameClients = new();
@@ -133,7 +134,7 @@ public static class Plugin
             return;
 
         SendMessageToClient(localClientId, "TS-SE Plugin - Established connection to Space Engineers plugin.");
-        Set3DSettings(distanceFactor: 0.3f, 1); // Better feeling distance scale
+        Set3DSettings(distanceFactor: 0.2f, 1); // Better feeling distance scale
 
         while (pipeStream.IsConnected && !cancellationToken.IsCancellationRequested)
         {
@@ -301,7 +302,7 @@ public static class Plugin
                 client.Position = state.Position;
 
                 if (localClientId != 0)
-                    SetClientPos(client.ClientID, state.Position);
+                    UpdateClientPosition(client);
             }
             else
             {
@@ -522,13 +523,31 @@ public static class Plugin
         tsClient.SteamID = gameClient.SteamID;
         tsClient.SteamName = gameClient.SteamName;
         tsClient.Position = gameClient.Position;
-        SetClientPos(tsClient.ClientID, tsClient.Position);
+        UpdateClientPosition(tsClient);
 
         lock (gameClients)
         {
             gameClients.Remove(gameClient);
             gameClients.Add(tsClient);
         }
+    }
+
+    static void SetClientIsWhispering(ushort clientId, bool isWhispering)
+    {
+        var client = GetClientByClientId(clientId);
+
+        if (client == null)
+            return;
+
+        //Console.WriteLine($"TS-SE Plugin - Setting client {clientId} whispering state to {isWhispering}");
+
+        client.IsWhispering = isWhispering;
+        UpdateClientPosition(client);
+    }
+
+    static void UpdateClientPosition(Client client)
+    {
+        SetClientPos(client.ClientID, client.IsWhispering ? default : client.Position);
     }
 
     static void Set3DSettings(float distanceFactor = 1, float rolloffScale = 1)
@@ -817,6 +836,15 @@ public static class Plugin
                 Console.WriteLine($"TS-SE Plugin - Unregisterd client left current channel. ClientID: {clientID}, OldChannelID: {oldChannelID}");
             }
         }
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onTalkStatusChangeEvent")]
+    public unsafe static void ts3plugin_onTalkStatusChangeEvent(ulong serverConnectionHandlerID, int status, int isReceivedWhisper, ushort clientID)
+    {
+        if ((TalkStatus)status == TalkStatus.STATUS_TALKING)
+            SetClientIsWhispering(clientID, isReceivedWhisper != 0);
+        else
+            SetClientIsWhispering(clientID, false);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onClientDisplayNameChanged")]

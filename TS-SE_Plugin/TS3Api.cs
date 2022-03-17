@@ -312,6 +312,13 @@ public struct TS3_VECTOR
     public float z;
 }
 
+enum TalkStatus
+{
+    STATUS_NOT_TALKING = 0,
+    STATUS_TALKING = 1,
+    STATUS_TALKING_WHILE_DISABLED = 2,
+}
+
 enum ClientProperties
 {
     CLIENT_UNIQUE_IDENTIFIER = 0,           //automatically up-to-date for any client "in view", can be used to identify this particular client installation
