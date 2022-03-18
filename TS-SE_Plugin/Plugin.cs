@@ -13,7 +13,7 @@ public static class Plugin
     static readonly string PluginName = "TS-SE Plugin";
     static readonly IntPtr PluginNamePtr = StringToHGlobalUTF8(PluginName);
 
-    static readonly string PluginVersion = "1.0.4";
+    static readonly string PluginVersion = "1.0.5";
     static readonly IntPtr PluginVersionPtr = StringToHGlobalUTF8(PluginVersion);
 
     static readonly string PluginAuthor = "Remaarn";
@@ -34,7 +34,6 @@ public static class Plugin
 
     static NamedPipeClientStream pipeStream = null!;
     static CancellationTokenSource cancellationTokenSource = null!;
-    static TaskCompletionSource? serverConnectedTcs;
     static Task runningTask = null!;
 
     class Client
@@ -73,22 +72,7 @@ public static class Plugin
 
     static void Init()
     {
-        serverConnectedTcs = new TaskCompletionSource();
-
         CreatePipe();
-
-        cancellationTokenSource.Token.Register(() =>
-        {
-            try
-            {
-                serverConnectedTcs?.SetCanceled(cancellationTokenSource.Token);
-            }
-            catch (InvalidOperationException)
-            {
-                // Task was likely completed
-            }
-        });
-
         runningTask = UpdateLoop(cancellationTokenSource.Token);
     }
 
@@ -100,6 +84,8 @@ public static class Plugin
 
     static void Dispose()
     {
+        Console.WriteLine("TS-SE Plugin - Disposing.");
+
         cancellationTokenSource.Cancel();
 
         try
@@ -112,10 +98,14 @@ public static class Plugin
         //connHandlerId = 0;
         localClientId = 0;
         currentChannelId = 0;
+
+        Console.WriteLine("TS-SE Plugin - Disposed.");
     }
 
     async static Task UpdateLoop(CancellationToken cancellationToken)
     {
+        bool fistRun = true;
+
         connect:
         await pipeStream.ConnectAsync(cancellationToken).ConfigureAwait(false);
 
@@ -124,17 +114,16 @@ public static class Plugin
 
         Console.WriteLine("TS-SE Plugin - Established connection to Space Engineers plugin.");
 
-        if (serverConnectedTcs != null)
+        if (fistRun)
         {
-            await serverConnectedTcs.Task.ConfigureAwait(false);
-            serverConnectedTcs = null;
+            // Message doesn't show if done while TS is starting up.
+            _ = Task.Delay(5000, cancellationToken).ContinueWith(t => PrintMessageToCurrentTab("TS-SE Plugin - Established connection to Space Engineers plugin."), cancellationToken);
+            fistRun = false;
         }
-
-        if (cancellationToken.IsCancellationRequested)
-            return;
-
-        SendMessageToClient(localClientId, "TS-SE Plugin - Established connection to Space Engineers plugin.");
-        Set3DSettings(distanceFactor: 0.2f, 1); // Better feeling distance scale
+        else
+        {
+            PrintMessageToCurrentTab("TS-SE Plugin - Established connection to Space Engineers plugin.");
+        }
 
         while (pipeStream.IsConnected && !cancellationToken.IsCancellationRequested)
         {
@@ -550,6 +539,30 @@ public static class Plugin
         SetClientPos(client.ClientID, client.IsWhispering ? default : client.Position);
     }
 
+    #region Wrapper Methods
+
+    unsafe static void LogMessage(string message, LogLevel level, string? channel)
+    {
+        byte nullChar = 0;
+        var msgPtr = Marshal.StringToHGlobalAnsi(message);
+        var chnPtr = channel != null ? Marshal.StringToHGlobalAnsi(channel) : (IntPtr)(&nullChar);
+
+        try
+        {
+            var err = (Ts3ErrorType)functions.logMessage((byte*)msgPtr, level, (byte*)chnPtr, connHandlerId);
+
+            if (err != Ts3ErrorType.ERROR_ok)
+                Console.WriteLine($"TS-SE Plugin - Failed to log message \"{message}\"");
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(msgPtr);
+
+            if (channel != null)
+                Marshal.FreeHGlobal(chnPtr);
+        }
+    }
+
     static void Set3DSettings(float distanceFactor = 1, float rolloffScale = 1)
     {
         Console.WriteLine($"TS-SE Plugin - Setting system 3D settings. DistanceFactor: {distanceFactor}, RolloffScale: {rolloffScale}.");
@@ -697,27 +710,21 @@ public static class Plugin
         }
     }
 
-    unsafe static void LogMessage(string message, LogLevel level, string? channel)
+    unsafe static void PrintMessageToCurrentTab(string message)
     {
-        byte nullChar = 0;
-        var msgPtr = Marshal.StringToHGlobalAnsi(message);
-        var chnPtr = channel != null ? Marshal.StringToHGlobalAnsi(channel) : (IntPtr)(&nullChar);
+        IntPtr ptr = Marshal.StringToHGlobalAnsi(message);
 
         try
         {
-            var err = (Ts3ErrorType)functions.logMessage((byte*)msgPtr, level, (byte*)chnPtr, connHandlerId);
-
-            if (err != Ts3ErrorType.ERROR_ok)
-                Console.WriteLine($"TS-SE Plugin - Failed to log message \"{message}\"");
+            functions.printMessageToCurrentTab((byte*)ptr);
         }
         finally
         {
-            Marshal.FreeHGlobal(msgPtr);
-
-            if (channel != null)
-                Marshal.FreeHGlobal(chnPtr);
+            Marshal.FreeHGlobal(ptr);
         }
     }
+
+    #endregion
 
     // Docs https://teamspeakdocs.github.io/PluginAPI/client_html/index.html
 
@@ -781,7 +788,7 @@ public static class Plugin
             if (GetLocalClientAndChannelID())
             {
                 RefetchTSClients();
-                serverConnectedTcs?.SetResult();
+                Set3DSettings(distanceFactor: 0.2f, 1); // Better feeling distance scale
             }
         }
         else if (connStatus == ConnectStatus.STATUS_DISCONNECTED)

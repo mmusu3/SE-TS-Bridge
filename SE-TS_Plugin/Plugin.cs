@@ -150,19 +150,9 @@ public class Plugin : IPlugin
 
     public void Update()
     {
-        var session = MyAPIGateway.Session;
-
-        if (session == null || !MyAPIGateway.Multiplayer.MultiplayerActive)
-            return;
-
-        var pc = MyAPIGateway.Players;
-
-        if (pc == null)
-            return;
-
         if (!pipeStream.IsConnected)
         {
-            if (connectResult == null)
+            if (connectResult == null || connectResult.IsCompleted)
             {
                 MyLog.Default.WriteLine("[SE-TS Bridge] Restarting connection.");
                 MyAPIGateway.Utilities?.ShowMessage("SE-TS Bridge", "Restarting connection.");
@@ -174,6 +164,16 @@ public class Plugin : IPlugin
 
             return;
         }
+
+        var session = MyAPIGateway.Session;
+
+        if (session == null || !MyAPIGateway.Multiplayer.MultiplayerActive)
+            return;
+
+        var pc = MyAPIGateway.Players;
+
+        if (pc == null)
+            return;
 
         if (session.LocalHumanPlayer == null)
             return;
@@ -362,8 +362,8 @@ public class Plugin : IPlugin
 
         try
         {
-            pipeStream.WriteAsync(buffer, 0, dataSize);
-            pipeStream.FlushAsync();
+            pipeStream.Write(buffer, 0, dataSize);
+            pipeStream.Flush();
         }
         finally
         {
