@@ -477,6 +477,13 @@ public enum PluginConnectTab
 
 #region clientlib_publicdefinitions.h
 
+public enum Visibility
+{
+    ENTER_VISIBILITY = 0,
+    RETAIN_VISIBILITY,
+    LEAVE_VISIBILITY
+}
+
 enum ConnectStatus
 {
     /// <summary>There is no activity to the server, this is the default value.</summary>

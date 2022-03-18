@@ -802,7 +802,20 @@ public static class Plugin
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onClientMoveEvent")]
-    public unsafe static void ts3plugin_onClientMoveEvent(ulong serverConnectionHandlerID, ushort clientID, ulong oldChannelID, ulong newChannelID, int visibility, byte* moveMessage)
+    public unsafe static void ts3plugin_onClientMoveEvent(ulong serverConnectionHandlerID, ushort clientID, ulong oldChannelID, ulong newChannelID, Visibility visibility, byte* moveMessage)
+    {
+        // Client moved themself
+        HandleClientMoved(serverConnectionHandlerID, clientID, oldChannelID, newChannelID);
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onClientMoveMovedEvent")]
+    public unsafe static void ts3plugin_onClientMoveMovedEvent(ulong serverConnectionHandlerID, ushort clientID, ulong oldChannelID, ulong newChannelID, Visibility visibility, ushort moverID, /*const */byte* moverName, /*const */byte* moverUniqueIdentifier, /*const */byte* moveMessage)
+    {
+        // Client was moved by another
+        HandleClientMoved(serverConnectionHandlerID, clientID, oldChannelID, newChannelID);
+    }
+
+    static void HandleClientMoved(ulong serverConnectionHandlerID, ushort clientID, ulong oldChannelID, ulong newChannelID)
     {
         if (clientID == localClientId)
         {
@@ -829,7 +842,7 @@ public static class Plugin
                 AddClientThreadSafe(clientID, name);
             }
         }
-        else
+        else if (oldChannelID == currentChannelId)
         {
             var client = GetClientByClientId(clientID);
 
@@ -842,6 +855,10 @@ public static class Plugin
             {
                 Console.WriteLine($"TS-SE Plugin - Unregisterd client left current channel. ClientID: {clientID}, OldChannelID: {oldChannelID}");
             }
+        }
+        else
+        {
+            // A client either moved between channels that aren't the current channnel or they left the server.
         }
     }
 
