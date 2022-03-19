@@ -13,7 +13,7 @@ public static class Plugin
     static readonly string PluginName = "TS-SE Plugin";
     static readonly IntPtr PluginNamePtr = StringToHGlobalUTF8(PluginName);
 
-    static readonly string PluginVersion = "1.0.5";
+    static readonly string PluginVersion = "1.0.6";
     static readonly IntPtr PluginVersionPtr = StringToHGlobalUTF8(PluginVersion);
 
     static readonly string PluginAuthor = "Remaarn";
@@ -31,6 +31,8 @@ public static class Plugin
 
     static TS3_VECTOR listenerForward = new() { x = 0, y = 0, z = -1 };
     static TS3_VECTOR listenerUp = new() { x = 0, y = 1, z = 0 };
+
+    const float distanceFactor = 0.2f; // Better feeling distance scale
 
     static NamedPipeClientStream pipeStream = null!;
     static CancellationTokenSource cancellationTokenSource = null!;
@@ -72,6 +74,14 @@ public static class Plugin
 
     static void Init()
     {
+        connHandlerId = functions.getCurrentServerConnectionHandlerID();
+
+        if (connHandlerId != 0 && GetLocalClientAndChannelID())
+        {
+            RefetchTSClients();
+            Set3DSettings(distanceFactor, 1);
+        }
+
         CreatePipe();
         runningTask = UpdateLoop(cancellationTokenSource.Token);
     }
@@ -98,6 +108,12 @@ public static class Plugin
         //connHandlerId = 0;
         localClientId = 0;
         currentChannelId = 0;
+
+        lock (tsClients)
+            tsClients.Clear();
+
+        lock (gameClients)
+            gameClients.Clear();
 
         Console.WriteLine("TS-SE Plugin - Disposed.");
     }
@@ -165,6 +181,11 @@ public static class Plugin
             return;
 
         await pipeStream.DisposeAsync().ConfigureAwait(false);
+
+        PrintMessageToCurrentTab("TS-SE Plugin - Closed connection to Space Engineers.");
+
+        lock (gameClients)
+            gameClients.Clear();
 
         CreatePipe();
         goto connect;
@@ -788,7 +809,7 @@ public static class Plugin
             if (GetLocalClientAndChannelID())
             {
                 RefetchTSClients();
-                Set3DSettings(distanceFactor: 0.2f, 1); // Better feeling distance scale
+                Set3DSettings(distanceFactor, 1);
             }
         }
         else if (connStatus == ConnectStatus.STATUS_DISCONNECTED)
