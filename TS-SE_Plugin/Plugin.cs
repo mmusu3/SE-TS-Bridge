@@ -13,7 +13,7 @@ public static class Plugin
     static readonly string PluginName = "TS-SE Plugin";
     static readonly IntPtr PluginNamePtr = StringToHGlobalUTF8(PluginName);
 
-    static readonly string PluginVersion = "1.0.6";
+    static readonly string PluginVersion = "1.0.7";
     static readonly IntPtr PluginVersionPtr = StringToHGlobalUTF8(PluginVersion);
 
     static readonly string PluginAuthor = "Remaarn";
@@ -48,8 +48,9 @@ public static class Plugin
         public bool IsWhispering;
     }
 
-    static readonly List<Client> gameClients = new();
     static readonly List<Client> tsClients = new();
+    static readonly List<Client> gameClients = new();
+    static readonly Dictionary<ulong, Client> gameClientsMap = new();
 
     static readonly MemoryPool<byte> memPool = MemoryPool<byte>.Shared;
 
@@ -105,15 +106,24 @@ public static class Plugin
         catch (AggregateException ex) when (ex.InnerException is TaskCanceledException) { }
 
         pipeStream.Dispose();
-        //connHandlerId = 0;
-        localClientId = 0;
-        currentChannelId = 0;
 
         lock (tsClients)
+        {
+            foreach (var item in tsClients)
+                SetClientPos(item.ClientID, default);
+
             tsClients.Clear();
+        }
 
         lock (gameClients)
+        {
             gameClients.Clear();
+            gameClientsMap.Clear();
+        }
+
+        connHandlerId = 0;
+        localClientId = 0;
+        currentChannelId = 0;
 
         Console.WriteLine("TS-SE Plugin - Disposed.");
     }
@@ -185,7 +195,10 @@ public static class Plugin
         PrintMessageToCurrentTab("TS-SE Plugin - Closed connection to Space Engineers.");
 
         lock (gameClients)
+        {
             gameClients.Clear();
+            gameClientsMap.Clear();
+        }
 
         CreatePipe();
         goto connect;
@@ -332,7 +345,6 @@ public static class Plugin
             {
                 ulong id = Read<ulong>(ref bytes);
 
-                // TODO: Need faster ID based lookup
                 for (int j = 0; j < gameClients.Count; j++)
                 {
                     var client = gameClients[j];
@@ -347,6 +359,8 @@ public static class Plugin
                     gameClients.RemoveAt(j);
                     break;
                 }
+
+                gameClientsMap.Remove(id);
             }
         }
     }
@@ -380,12 +394,16 @@ public static class Plugin
 
             lock (gameClients)
             {
-                bool exists = gameClients.Remove(client);
+                bool exists = gameClientsMap.Remove(client.SteamID);
 
                 if (exists)
+                {
+                    gameClients.Remove(client);
                     Console.WriteLine($"TS-SE Plugin - Error, game client already exists. SteamId: {id}, ClientId: {client.ClientID}, SteamName:{name}");
+                }
 
                 gameClients.Add(client);
+                gameClientsMap.Add(client.SteamID, client);
             }
         }
     }
@@ -438,22 +456,13 @@ public static class Plugin
 
     static Client? GetClientBySteamId(ulong id)
     {
-        Client? client = null;
-
         lock (gameClients)
         {
-            // TODO: Dictionary?
-            foreach (var item in gameClients)
-            {
-                if (item.SteamID == id)
-                {
-                    client = item;
-                    break;
-                }
-            }
+            if (gameClientsMap.TryGetValue(id, out var client))
+                return client;
         }
 
-        return client;
+        return null;
     }
 
     static Client? GetClientBySteamName(string name)
@@ -539,6 +548,7 @@ public static class Plugin
         {
             gameClients.Remove(gameClient);
             gameClients.Add(tsClient);
+            gameClientsMap[tsClient.SteamID] = tsClient;
         }
     }
 
