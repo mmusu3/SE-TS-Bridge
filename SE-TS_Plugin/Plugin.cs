@@ -33,6 +33,8 @@ public class Plugin : IPlugin
     NamedPipeServerStream pipeStream;
     IAsyncResult connectResult;
 
+    readonly Vector3 mouthOffset = new Vector3(0, 1.6f, -0.1f); // Approximate mouth offset
+
     struct Header
     {
         public int CheckValue;
@@ -218,8 +220,7 @@ public class Plugin : IPlugin
             var pos = item.GetPosition();
 
             if (item.Character != null)
-                // Add approximate head height
-                pos += Vector3.Transform(new Vector3(0, 1.7f, 0), item.Character.WorldMatrix.GetOrientation());
+                pos += Vector3.Transform(mouthOffset, item.Character.WorldMatrix.GetOrientation());
 
             newPlayers.Add(new Player {
                 InternalPlayer = item,
@@ -247,10 +248,13 @@ public class Plugin : IPlugin
 
         //    if (index == -1)
         //    {
+        //        var pos = item.GetPosition();
+        //        pos += Vector3.Transform(mouthOffset, character.WorldMatrix.GetOrientation());
+
         //        newPlayers.Add(new Player {
         //            SteamID = playerId.SteamId,
         //            DisplayName = character.GetIdentity().DisplayName,
-        //            Position = item.GetPosition()
+        //            Position = pos
         //        });
         //    }
         //}
@@ -306,8 +310,7 @@ public class Plugin : IPlugin
                     pos = item.Position;
 
                     if (item.InternalPlayer.Character != null)
-                        // Add approximate head height
-                        pos += Vector3.Transform(new Vector3(0, 1.7f, 0), item.InternalPlayer.Character.WorldMatrix.GetOrientation());
+                        pos += Vector3.Transform(mouthOffset, item.InternalPlayer.Character.WorldMatrix.GetOrientation());
                 }
                 else
                 {

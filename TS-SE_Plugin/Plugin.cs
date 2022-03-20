@@ -2,6 +2,7 @@
 using System.Buffers;
 using System.Collections.Generic;
 using System.IO.Pipes;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -22,6 +23,9 @@ public static class Plugin
     static readonly string PluginDescription = "This plugin integrates with Space Engineers to enable positional audio.";
     static readonly IntPtr PluginDescriptionPtr = StringToHGlobalUTF8(PluginDescription);
 
+    static readonly string CommandKeyword = "setsbridge";
+    static readonly IntPtr CommandKeywordPtr = StringToHGlobalUTF8(CommandKeyword);
+
     static TS3Functions functions;
     unsafe static byte* pluginID = null;
 
@@ -32,7 +36,8 @@ public static class Plugin
     static TS3_VECTOR listenerForward = new() { x = 0, y = 0, z = -1 };
     static TS3_VECTOR listenerUp = new() { x = 0, y = 1, z = 0 };
 
-    const float distanceFactor = 0.2f; // Better feeling distance scale
+    static float distanceScale = 0.3f;
+    static float distanceFalloff = 0.9f;
 
     static NamedPipeClientStream pipeStream = null!;
     static CancellationTokenSource cancellationTokenSource = null!;
@@ -80,7 +85,7 @@ public static class Plugin
         if (connHandlerId != 0 && GetLocalClientAndChannelID())
         {
             RefetchTSClients();
-            Set3DSettings(distanceFactor, 1);
+            Set3DSettings(distanceScale, 1);
         }
 
         CreatePipe();
@@ -570,6 +575,21 @@ public static class Plugin
         SetClientPos(client.ClientID, client.IsWhispering ? default : client.Position);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static float DistanceSquared(TS3_VECTOR a, TS3_VECTOR b)
+    {
+        float x = b.x - a.x;
+        float y = b.y - a.y;
+        float z = b.z - a.z;
+        return x * x + y * y + z * z;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static float Distance(TS3_VECTOR a, TS3_VECTOR b)
+    {
+        return MathF.Sqrt(DistanceSquared(a, b));
+    }
+
     #region Wrapper Methods
 
     unsafe static void LogMessage(string message, LogLevel level, string? channel)
@@ -594,14 +614,19 @@ public static class Plugin
         }
     }
 
-    static void Set3DSettings(float distanceFactor = 1, float rolloffScale = 1)
+    static bool Set3DSettings(float distanceFactor, float rolloffScale)
     {
         Console.WriteLine($"TS-SE Plugin - Setting system 3D settings. DistanceFactor: {distanceFactor}, RolloffScale: {rolloffScale}.");
 
         var err = (Ts3ErrorType)functions.systemset3DSettings(connHandlerId, distanceFactor, rolloffScale);
 
         if (err != Ts3ErrorType.ERROR_ok)
+        {
             Console.WriteLine($"TS-SE Plugin - Failed to set system 3D settings. Error: {err}");
+            return false;
+        }
+
+        return true;
     }
 
     unsafe static void SetListener(TS3_VECTOR forward, TS3_VECTOR up)
@@ -803,6 +828,52 @@ public static class Plugin
 
     #region Optional functions
 
+    [UnmanagedCallersOnly(EntryPoint = "ts3plugin_commandKeyword")]
+    public unsafe static /*const */byte* ts3plugin_commandKeyword()
+    {
+        return (byte*)CommandKeywordPtr;
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "ts3plugin_processCommand")]
+    public unsafe static int ts3plugin_processCommand(ulong serverConnectionHandlerID, /*const */byte* command)
+    {
+        var cmd = Marshal.PtrToStringUTF8((IntPtr)command);
+
+        if (cmd == null)
+            return 1;
+
+        if (cmd.StartsWith("distancescale ", StringComparison.OrdinalIgnoreCase))
+        {
+            if (float.TryParse(cmd.AsSpan()["distancescale ".Length..].Trim(), out float value))
+            {
+                distanceScale = value;
+
+                if (Set3DSettings(distanceScale, 1))
+                    PrintMessageToCurrentTab($"Setting distance scale to {distanceScale}");
+                else
+                    PrintMessageToCurrentTab($"Error, failed to set distance scale value.");
+            }
+            else
+            {
+                PrintMessageToCurrentTab($"Error, failed to parse value.");
+            }
+        }
+        else if (cmd.StartsWith("distancefalloff ", StringComparison.OrdinalIgnoreCase))
+        {
+            if (float.TryParse(cmd.AsSpan()["distancefalloff ".Length..].Trim(), out float value))
+            {
+                distanceFalloff = value;
+                PrintMessageToCurrentTab($"Setting distance falloff to {distanceFalloff}");
+            }
+            else
+            {
+                PrintMessageToCurrentTab($"Error, failed to parse value.");
+            }
+        }
+
+        return 0;
+    }
+
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_currentServerConnectionChanged")]
     public unsafe static void ts3plugin_currentServerConnectionChanged(ulong serverConnectionHandlerID)
     {
@@ -819,7 +890,7 @@ public static class Plugin
             if (GetLocalClientAndChannelID())
             {
                 RefetchTSClients();
-                Set3DSettings(distanceFactor, 1);
+                Set3DSettings(distanceScale, 1);
             }
         }
         else if (connStatus == ConnectStatus.STATUS_DISCONNECTED)
@@ -900,6 +971,20 @@ public static class Plugin
             SetClientIsWhispering(clientID, isReceivedWhisper != 0);
         else
             SetClientIsWhispering(clientID, false);
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onCustom3dRolloffCalculationClientEvent")]
+    public unsafe static void ts3plugin_onCustom3dRolloffCalculationClientEvent(ulong serverConnectionHandlerID, ushort clientID, float distance, float* volume)
+    {
+        var client = GetClientByClientId(clientID);
+
+        if (client == null)
+            return;
+
+        float dist = Distance(default, client.Position);
+        *volume = Math.Clamp(1f / MathF.Pow((dist * distanceScale) + 0.6f, distanceFalloff), 0, 1);
+
+        //Console.WriteLine($"DistScale: {distanceScale}, DistFalloff: {distanceFalloff}, Dist: {dist}, Vol: {*volume}");
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onClientDisplayNameChanged")]
