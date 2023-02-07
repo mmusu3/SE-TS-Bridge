@@ -28,5 +28,14 @@ To enable positional audio support go to TeamSpeak Options->Playback and ensure 
 
 When updating either plugin, first close the respective application before re-copying the plugin files.  
 
-## Usage
-Space Engineers and TeamSpeak users are matched by name. As such, for proper operation clients must have the same name in TS and Steam. Users can change their TeamSpeak name to match their Steam name without rejoining the TeamSpeak server.  
+##### Commands
+* `setsbridge distancescale (x)`
+* `setsbridge distancefalloff (x)`
+
+Where (x) is a number.
+
+Default values:  
+* `distancescale 0.3`
+* `distancefalloff 0.9`
+
+These commands will be restricted in future releases.
