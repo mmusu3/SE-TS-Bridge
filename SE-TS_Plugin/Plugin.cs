@@ -214,13 +214,17 @@ public class Plugin : IPlugin
 
         foreach (var item in tempPlayers)
         {
-            if (item == localPlayer || PlayerExists(currentPlayers, item))
+            if (item == localPlayer || item.IsBot || PlayerExists(currentPlayers, item))
                 continue;
 
-            var pos = item.GetPosition();
+            var c = item.Character;
 
-            if (item.Character != null)
-                pos += Vector3.Transform(mouthOffset, item.Character.WorldMatrix.GetOrientation());
+            Vector3D pos;
+
+            if (c != null)
+                pos = c.GetPosition() + Vector3.Transform(mouthOffset, c.WorldMatrix.GetOrientation());
+            else
+                pos = item.GetPosition();
 
             newPlayers.Add(new Player {
                 InternalPlayer = item,
@@ -233,31 +237,59 @@ public class Plugin : IPlugin
         tempPlayers.Clear();
 
         // Testing code for SE single player
-        //var entities = new HashSet<IMyEntity>();
-        //MyAPIGateway.Entities.GetEntities(entities, e => e is MyCharacter);
+        {
+            //static IEnumerable<MyCharacter> GetCharacters()
+            //{
+            //    var entities = new HashSet<IMyEntity>();
+            //    MyAPIGateway.Entities.GetEntities(entities);
 
-        //foreach (var item in entities)
-        //{
-        //    var character = (MyCharacter)item;
-        //    character.GetPlayerId(out var playerId);
+            //    HashSet<IMyEntity> childEntities = null;
 
-        //    if (playerId.SteamId == localPlayer.SteamUserId)
-        //        continue;
+            //    foreach (var item in entities)
+            //    {
+            //        switch (item)
+            //        {
+            //        case MyCharacter character:
+            //            yield return character;
+            //            break;
+            //        case IMyCubeGrid:
+            //            childEntities ??= new HashSet<IMyEntity>();
+            //            item.Hierarchy.GetChildrenRecursive(childEntities);
 
-        //    int index = currentPlayers.FindIndex(p => p.SteamID == playerId.SteamId);
+            //            foreach (var child in childEntities)
+            //            {
+            //                if (child is MyCharacter _char)
+            //                    yield return _char;
+            //            }
 
-        //    if (index == -1)
-        //    {
-        //        var pos = item.GetPosition();
-        //        pos += Vector3.Transform(mouthOffset, character.WorldMatrix.GetOrientation());
+            //            childEntities.Clear();
+            //            break;
+            //        }
+            //    }
+            //}
 
-        //        newPlayers.Add(new Player {
-        //            SteamID = playerId.SteamId,
-        //            DisplayName = character.GetIdentity().DisplayName,
-        //            Position = pos
-        //        });
-        //    }
-        //}
+            //foreach (var character in GetCharacters())
+            //{
+            //    character.GetPlayerId(out var playerId);
+
+            //    if (playerId.SteamId == localPlayer.SteamUserId)
+            //        continue;
+
+            //    int index = currentPlayers.FindIndex(p => p.SteamID == playerId.SteamId);
+
+            //    if (index == -1)
+            //    {
+            //        var pos = ((IMyEntity)character).GetPosition();
+            //        pos += Vector3.Transform(mouthOffset, character.WorldMatrix.GetOrientation());
+
+            //        newPlayers.Add(new Player {
+            //            SteamID = playerId.SteamId,
+            //            DisplayName = character.GetIdentity().DisplayName,
+            //            Position = pos
+            //        });
+            //    }
+            //}
+        }
 
         int newPlayersByteLength = 0;
 
@@ -302,15 +334,20 @@ public class Plugin : IPlugin
         {
             foreach (var item in currentPlayers)
             {
+                var p = item.InternalPlayer;
+
                 Vector3 pos;
 
-                if (item.InternalPlayer != null)
+                if (p != null)
                 {
-                    item.Position = item.InternalPlayer.GetPosition();
-                    pos = item.Position;
+                    var c = p.Character;
 
-                    if (item.InternalPlayer.Character != null)
-                        pos += Vector3.Transform(mouthOffset, item.InternalPlayer.Character.WorldMatrix.GetOrientation());
+                    if (c != null)
+                        pos = c.GetPosition() + Vector3.Transform(mouthOffset, c.WorldMatrix.GetOrientation());
+                    else
+                        pos = p.GetPosition();
+
+                    item.Position = pos;
                 }
                 else
                 {
