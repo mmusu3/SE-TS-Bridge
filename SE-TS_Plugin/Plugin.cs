@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO.Pipes;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using Sandbox.Engine.Networking;
 using Sandbox.Game.Entities.Character;
 using Sandbox.Game.World;
 using Sandbox.ModAPI;
@@ -38,6 +39,7 @@ public class Plugin : IPlugin
     struct Header
     {
         public int CheckValue;
+        public ulong LocalSteamId;
         public Vector3 Forward;
         public Vector3 Up;
         public int PlayerCount;
@@ -103,6 +105,7 @@ public class Plugin : IPlugin
 
         var header = new Header {
             CheckValue = 0x12ABCDEF,
+            LocalSteamId = MyGameService.UserId,
             Forward = Vector3.Forward,
             Up = Vector3.Up,
             PlayerCount = 0,
@@ -311,6 +314,7 @@ public class Plugin : IPlugin
 
         var header = new Header {
             CheckValue = 0x12ABCDEF,
+            LocalSteamId = localPlayer.SteamUserId,
             Forward = localOrient.Forward,
             Up = localOrient.Up,
             PlayerCount = currentPlayers.Count,

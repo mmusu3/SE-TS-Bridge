@@ -321,29 +321,94 @@ enum TalkStatus
 
 enum ClientProperties
 {
-    CLIENT_UNIQUE_IDENTIFIER = 0,           //automatically up-to-date for any client "in view", can be used to identify this particular client installation
-    CLIENT_NICKNAME,                        //automatically up-to-date for any client "in view"
-    CLIENT_VERSION,                         //for other clients than ourself, this needs to be requested (=> requestClientVariables)
-    CLIENT_PLATFORM,                        //for other clients than ourself, this needs to be requested (=> requestClientVariables)
-    CLIENT_FLAG_TALKING,                    //automatically up-to-date for any client that can be heard (in room / whisper)
-    CLIENT_INPUT_MUTED,                     //automatically up-to-date for any client "in view", this clients microphone mute status
-    CLIENT_OUTPUT_MUTED,                    //automatically up-to-date for any client "in view", this clients headphones/speakers/mic combined mute status
-    CLIENT_OUTPUTONLY_MUTED,                //automatically up-to-date for any client "in view", this clients headphones/speakers only mute status
-    CLIENT_INPUT_HARDWARE,                  //automatically up-to-date for any client "in view", this clients microphone hardware status (is the capture device opened?)
-    CLIENT_OUTPUT_HARDWARE,                 //automatically up-to-date for any client "in view", this clients headphone/speakers hardware status (is the playback device opened?)
-    CLIENT_INPUT_DEACTIVATED,               //only usable for ourself, not propagated to the network
-    CLIENT_IDLE_TIME,                       //internal use
-    CLIENT_DEFAULT_CHANNEL,                 //only usable for ourself, the default channel we used to connect on our last connection attempt
-    CLIENT_DEFAULT_CHANNEL_PASSWORD,        //internal use
-    CLIENT_SERVER_PASSWORD,                 //internal use
-    CLIENT_META_DATA,                       //automatically up-to-date for any client "in view", not used by TeamSpeak, free storage for sdk users
-    CLIENT_IS_MUTED,                        //only make sense on the client side locally, "1" if this client is currently muted by us, "0" if he is not
-    CLIENT_IS_RECORDING,                    //automatically up-to-date for any client "in view"
-    CLIENT_VOLUME_MODIFICATOR,              //internal use
-    CLIENT_VERSION_SIGN,                    //sign
-    CLIENT_SECURITY_HASH,                   //SDK use, not used by teamspeak. Hash is provided by an outside source. A channel will use the security salt + other client data to calculate a hash, which must be the same as the one provided here.
-    CLIENT_ENCRYPTION_CIPHERS,              //internal use
+    /// <summary>Automatically up-to-date for any client "in view", can be used to identify this particular client installation.</summary>
+    CLIENT_UNIQUE_IDENTIFIER = 0,
+
+    /// <summary>Automatically up-to-date for any client "in view".</summary>
+    CLIENT_NICKNAME,
+
+    /// <summary>For other clients than ourself, this needs to be requested (=> requestClientVariables).</summary>
+    CLIENT_VERSION,
+
+    /// <summary>For other clients than ourself, this needs to be requested (=> requestClientVariables).</summary>
+    CLIENT_PLATFORM,
+
+    /// <summary>Automatically up-to-date for any client that can be heard (in room / whisper).</summary>
+    CLIENT_FLAG_TALKING,
+
+    /// <summary>Automatically up-to-date for any client "in view", this clients microphone mute status.</summary>
+    CLIENT_INPUT_MUTED,
+
+    /// <summary>Automatically up-to-date for any client "in view", this clients headphones/speakers/mic combined mute status.</summary>
+    CLIENT_OUTPUT_MUTED,
+
+    /// <summary>Automatically up-to-date for any client "in view", this clients headphones/speakers only mute status.</summary>
+    CLIENT_OUTPUTONLY_MUTED,
+
+    /// <summary>Automatically up-to-date for any client "in view", this clients microphone hardware status (is the capture device opened?).</summary>
+    CLIENT_INPUT_HARDWARE,
+
+    /// <summary>Automatically up-to-date for any client "in view", this clients headphone/speakers hardware status (is the playback device opened?).</summary>
+    CLIENT_OUTPUT_HARDWARE,
+
+    /// <summary>Only usable for ourself, not propagated to the network.</summary>
+    CLIENT_INPUT_DEACTIVATED,
+
+    /// <summary>Internal use.</summary>
+    CLIENT_IDLE_TIME,
+
+    /// <summary>Only usable for ourself, the default channel we used to connect on our last connection attempt.</summary>
+    CLIENT_DEFAULT_CHANNEL,
+
+    /// <summary>Internal use.</summary>
+    CLIENT_DEFAULT_CHANNEL_PASSWORD,
+
+    /// <summary>Internal use.</summary>
+    CLIENT_SERVER_PASSWORD,
+
+    /// <summary>Automatically up-to-date for any client "in view", not used by TeamSpeak, free storage for sdk users.</summary>
+    CLIENT_META_DATA,
+
+    /// <summary>Only make sense on the client side locally, "1" if this client is currently muted by us, "0" if he is not.</summary>
+    CLIENT_IS_MUTED,
+
+    /// <summary>Automatically up-to-date for any client "in view".</summary>
+    CLIENT_IS_RECORDING,
+
+    /// <summary>Internal use.</summary>
+    CLIENT_VOLUME_MODIFICATOR,
+
+    /// <summary>Sign.</summary>
+    CLIENT_VERSION_SIGN,
+
+    /// <summary>SDK use, not used by teamspeak. Hash is provided by an outside source. A channel will use the security salt + other client data to calculate a hash, which must be the same as the one provided here.</summary>
+    CLIENT_SECURITY_HASH,
+
+    /// <summary>Internal use.</summary>
+    CLIENT_ENCRYPTION_CIPHERS,
+
     CLIENT_ENDMARKER,
+}
+
+#endregion
+
+#region public_rare_definitions.h
+
+enum PluginTargetMode
+{
+    /// <summary>Send plugincmd to all clients in current channel.</summary>
+    PluginCommandTarget_CURRENT_CHANNEL = 0,
+
+    /// <summary>Send plugincmd to all clients on server.</summary>
+    PluginCommandTarget_SERVER,
+
+    /// <summary>Send plugincmd to all given client ids.</summary>
+    PluginCommandTarget_CLIENT,
+
+    /// <summary>Send plugincmd to all subscribed clients in current channel.</summary>
+    PluginCommandTarget_CURRENT_CHANNEL_SUBSCRIBED_CLIENTS,
+
+    PluginCommandTarget_MAX
 }
 
 #endregion

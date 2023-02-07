@@ -14,7 +14,7 @@ public static class Plugin
     static readonly string PluginName = "TS-SE Plugin";
     static readonly IntPtr PluginNamePtr = StringToHGlobalUTF8(PluginName);
 
-    static readonly string PluginVersion = "1.0.7";
+    static readonly string PluginVersion = "1.0.8";
     static readonly IntPtr PluginVersionPtr = StringToHGlobalUTF8(PluginVersion);
 
     static readonly string PluginAuthor = "Remaarn";
@@ -47,15 +47,14 @@ public static class Plugin
     {
         public ulong SteamID;
         public ushort ClientID;
-        public string? SteamName;
         public string? ClientName;
         public TS3_VECTOR Position;
         public bool IsWhispering;
     }
 
-    static readonly List<Client> tsClients = new();
-    static readonly List<Client> gameClients = new();
-    static readonly Dictionary<ulong, Client> gameClientsMap = new();
+    static ulong localSteamId = 0;
+
+    static readonly List<Client> clients = new();
 
     static readonly MemoryPool<byte> memPool = MemoryPool<byte>.Shared;
 
@@ -65,7 +64,7 @@ public static class Plugin
             return IntPtr.Zero;
 
         int nb = System.Text.Encoding.UTF8.GetMaxByteCount(s.Length);
-        IntPtr ptr = Marshal.AllocHGlobal(nb + 1);
+        void* ptr = NativeMemory.Alloc((uint)nb + 1);
 
         int nbWritten;
         byte* pbMem = (byte*)ptr;
@@ -75,7 +74,7 @@ public static class Plugin
 
         pbMem[nbWritten] = 0;
 
-        return ptr;
+        return (IntPtr)ptr;
     }
 
     static void Init()
@@ -112,18 +111,12 @@ public static class Plugin
 
         pipeStream.Dispose();
 
-        lock (tsClients)
+        lock (clients)
         {
-            foreach (var item in tsClients)
+            foreach (var item in clients)
                 SetClientPos(item.ClientID, default);
 
-            tsClients.Clear();
-        }
-
-        lock (gameClients)
-        {
-            gameClients.Clear();
-            gameClientsMap.Clear();
+            clients.Clear();
         }
 
         connHandlerId = 0;
@@ -199,11 +192,7 @@ public static class Plugin
 
         PrintMessageToCurrentTab("TS-SE Plugin - Closed connection to Space Engineers.");
 
-        lock (gameClients)
-        {
-            gameClients.Clear();
-            gameClientsMap.Clear();
-        }
+        RemoveGameOnlyClients();
 
         CreatePipe();
         goto connect;
@@ -213,6 +202,7 @@ public static class Plugin
     struct Header
     {
         public int CheckValue;
+        public ulong LocalSteamId;
         public TS3_VECTOR Forward;
         public TS3_VECTOR Up;
         public int PlayerCount;
@@ -250,7 +240,7 @@ public static class Plugin
             return (UpdateResult.Canceled, null);
 
         if (bytes == 0)
-            return (UpdateResult.Closed, "Pipe returned zero bytes");
+            return (UpdateResult.Closed, "Pipe returned zero bytes.");
 
         if (bytes != Header.Size)
             return (UpdateResult.Corrupt, $"Expected {Header.Size} bytes, got {bytes}");
@@ -259,6 +249,13 @@ public static class Plugin
 
         if (header.CheckValue != 0x12ABCDEF)
             return (UpdateResult.Corrupt, "Invalid data");
+
+        bool steamIdChanged = header.LocalSteamId != localSteamId;
+
+        localSteamId = header.LocalSteamId;
+
+        if (steamIdChanged)
+            SendLocalSteamIdToCurrentChannel();
 
         listenerForward = header.Forward;
         listenerUp = header.Up;
@@ -314,6 +311,25 @@ public static class Plugin
         return (UpdateResult.OK, null);
     }
 
+    unsafe static void SendLocalSteamIdToCurrentChannel()
+    {
+        IntPtr command = StringToHGlobalUTF8("TSSE,SteamId:" + localSteamId);
+
+        functions.sendPluginCommand(connHandlerId, pluginID, (byte*)command, (int)PluginTargetMode.PluginCommandTarget_CURRENT_CHANNEL, null, null);
+
+        NativeMemory.Free((void*)command);
+    }
+
+    unsafe static void SendLocalSteamIdToClient(Client client)
+    {
+        IntPtr command = StringToHGlobalUTF8("TSSE,SteamId:" + localSteamId);
+        ushort* clientIds = stackalloc ushort[2] { client.ClientID, 0 };
+
+        functions.sendPluginCommand(connHandlerId, pluginID, (byte*)command, (int)PluginTargetMode.PluginCommandTarget_CLIENT, clientIds, null);
+
+        NativeMemory.Free((void*)command);
+    }
+
     static void ProcessClientStates(ReadOnlySpan<byte> bytes)
     {
         var states = MemoryMarshal.Cast<byte, ClientState>(bytes);
@@ -344,28 +360,29 @@ public static class Plugin
     {
         Console.WriteLine($"TS-SE Plugin - Removing {numRemovedPlayers} game clients.");
 
-        lock (gameClients)
+        lock (clients)
         {
             for (int i = 0; i < numRemovedPlayers; i++)
             {
-                ulong id = Read<ulong>(ref bytes);
+                ulong steamId = Read<ulong>(ref bytes);
 
-                for (int j = 0; j < gameClients.Count; j++)
+                for (int j = clients.Count - 1; j >= 0; j--)
                 {
-                    var client = gameClients[j];
+                    var client = clients[j];
 
-                    if (client.SteamID != id)
+                    if (client.SteamID != steamId)
                         continue;
 
                     client.SteamID = 0;
-                    client.SteamName = null;
                     client.Position = default;
-                    SetClientPos(client.ClientID, default);
-                    gameClients.RemoveAt(j);
+
+                    if (client.ClientID != 0)
+                        SetClientPos(client.ClientID, default);
+                    else
+                        clients.RemoveAt(j);
+
                     break;
                 }
-
-                gameClientsMap.Remove(id);
             }
         }
     }
@@ -378,38 +395,27 @@ public static class Plugin
         {
             ulong id = Read<ulong>(ref bytes);
             int nameLength = Read<int>(ref bytes);
-            var name = new string(MemoryMarshal.Cast<byte, char>(bytes.Slice(0, nameLength * sizeof(char))));
+            var name = new string(MemoryMarshal.Cast<byte, char>(bytes).Slice(0, nameLength));
 
             bytes = bytes.Slice(nameLength * sizeof(char));
 
-            var client = GetClientByClientName(name);
+            var client = GetClientBySteamId(id);
 
-            if (client != null)
+            if (client == null)
             {
-                Console.WriteLine($"TS-SE Plugin - Pairing Steam ID with existing client. SteamId: {id}, ClientId: {client.ClientID}, SteamName: {name}");
+                client = new Client { SteamID = id };
+
+                lock (clients)
+                    clients.Add(client);
+
+                Console.WriteLine($"TS-SE Plugin - Created client from Steam ID. SteamId: {id}, SteamName:{name}");
             }
             else
             {
-                client = new Client();
+                Console.WriteLine($"TS-SE Plugin - Matching client found for Steam ID. SteamId: {id}, SteamName:{name}");
             }
 
-            client.SteamID = id;
-            client.SteamName = name;
             client.Position = Read<TS3_VECTOR>(ref bytes);
-
-            lock (gameClients)
-            {
-                bool exists = gameClientsMap.Remove(client.SteamID);
-
-                if (exists)
-                {
-                    gameClients.Remove(client);
-                    Console.WriteLine($"TS-SE Plugin - Error, game client already exists. SteamId: {id}, ClientId: {client.ClientID}, SteamName:{name}");
-                }
-
-                gameClients.Add(client);
-                gameClientsMap.Add(client.SteamID, client);
-            }
         }
     }
 
@@ -422,105 +428,53 @@ public static class Plugin
 
     static Client? GetClientByClientId(ushort id)
     {
-        Client? client = null;
-
-        lock (tsClients)
+        lock (clients)
         {
-            // TODO: Dictionary?
-            foreach (var item in tsClients)
+            foreach (var item in clients)
             {
                 if (item.ClientID == id)
-                {
-                    client = item;
-                    break;
-                }
+                    return item;
             }
-        }
-
-        return client;
-    }
-
-    static Client? GetClientByClientName(string name)
-    {
-        Client? client = null;
-
-        lock (tsClients)
-        {
-            foreach (var item in tsClients)
-            {
-                if (item.ClientName == name)
-                {
-                    client = item;
-                    break;
-                }
-            }
-        }
-
-        return client;
-    }
-
-    static Client? GetClientBySteamId(ulong id)
-    {
-        lock (gameClients)
-        {
-            if (gameClientsMap.TryGetValue(id, out var client))
-                return client;
         }
 
         return null;
     }
 
-    static Client? GetClientBySteamName(string name)
+    static Client? GetClientBySteamId(ulong id)
     {
-        Client? client = null;
-
-        lock (gameClients)
+        lock (clients)
         {
-            foreach (var item in gameClients)
+            foreach (var item in clients)
             {
-                if (item.SteamName == name)
-                {
-                    client = item;
-                    break;
-                }
+                if (item.SteamID == id)
+                    return item;
             }
         }
+
+        return null;
+    }
+
+    static Client AddClientThreadSafe(ushort id, string? name)
+    {
+        lock (clients)
+            return AddClient(id, name);
+    }
+
+    static Client AddClient(ushort id, string? name)
+    {
+        var client = new Client {
+            ClientID = id,
+            ClientName = name
+        };
+
+        clients.Add(client);
 
         return client;
     }
 
-    static void AddClientThreadSafe(ushort id, string? name)
-    {
-        lock (tsClients)
-            AddClient(id, name);
-    }
-
-    static void AddClient(ushort id, string? name)
-    {
-        Client? client = null;
-
-        if (name != null)
-            client = GetClientBySteamName(name);
-
-        if (client != null)
-        {
-            client.ClientID = id;
-            Console.WriteLine($"TS-SE Plugin - Pairing client ID with existing Steam ID. SteamId: {id}, ClientId: {client.ClientID}, ClientName: {name}");
-        }
-        else
-        {
-            client = new Client();
-        }
-
-        client.ClientID = id;
-        client.ClientName = name;
-
-        tsClients.Add(client);
-    }
-
     static void RemoveClientThreadSafe(Client client, bool resetPos)
     {
-        lock (tsClients)
+        lock (clients)
             RemoveClient(client, resetPos);
     }
 
@@ -529,31 +483,36 @@ public static class Plugin
         if (resetPos)
             SetClientPos(client.ClientID, default);
 
-        int index = tsClients.IndexOf(client);
+        bool removed = clients.Remove(client);
 
-        if (index != -1)
-            tsClients.RemoveAt(index);
-        else
+        if (!removed)
             Console.WriteLine($"TS-SE Plugin - Failed to unregister client. ClientId: {client.ClientID}");
 
         client.ClientID = 0;
         client.ClientName = null;
     }
 
-    static void MergeClients(Client tsClient, Client gameClient)
+    static void RemoveTSOnlyClients()
     {
-        Console.WriteLine($"TS-SE Plugin - Merging clients by name. ClientName: {tsClient.ClientName} ClientId: {tsClient.ClientID}, SteamId: {gameClient.SteamID}");
-
-        tsClient.SteamID = gameClient.SteamID;
-        tsClient.SteamName = gameClient.SteamName;
-        tsClient.Position = gameClient.Position;
-        UpdateClientPosition(tsClient);
-
-        lock (gameClients)
+        lock (clients)
         {
-            gameClients.Remove(gameClient);
-            gameClients.Add(tsClient);
-            gameClientsMap[tsClient.SteamID] = tsClient;
+            for (int i = clients.Count - 1; i >= 0; i--)
+            {
+                if (clients[i].SteamID == 0)
+                    clients.RemoveAt(i);
+            }
+        }
+    }
+
+    static void RemoveGameOnlyClients()
+    {
+        lock (clients)
+        {
+            for (int i = clients.Count - 1; i >= 0; i--)
+            {
+                if (clients[i].ClientID == 0)
+                    clients.RemoveAt(i);
+            }
         }
     }
 
@@ -658,6 +617,8 @@ public static class Plugin
 
     unsafe static void RefetchTSClients()
     {
+        Console.WriteLine("TS-SE Plugin - Refetching client list.");
+
         ushort* clientList;
         var err = (Ts3ErrorType)functions.getChannelClientList(connHandlerId, currentChannelId, &clientList);
 
@@ -667,26 +628,29 @@ public static class Plugin
             return;
         }
 
-        int i = 0;
+        RemoveTSOnlyClients();
 
-        lock (tsClients)
+        int numAdded = 0;
+
+        lock (clients)
         {
-            tsClients.Clear();
-
+            int i = 0;
             ushort id;
 
             while ((id = clientList[i++]) != 0)
             {
-                if (id != localClientId)
-                {
-                    var name = GetClientName(id);
-                    AddClient(id, name);
-                }
-            }
+                if (id == localClientId)
+                    continue;
 
-            if (tsClients.Count != 0)
-                Console.WriteLine($"TS-SE Plugin - Added {tsClients.Count} clients.");
+                var name = GetClientName(id);
+
+                AddClient(id, name);
+                numAdded++;
+            }
         }
+
+        if (numAdded != 0)
+            Console.WriteLine($"TS-SE Plugin - Added {numAdded} clients.");
 
         err = (Ts3ErrorType)functions.freeMemory(clientList);
 
@@ -817,7 +781,7 @@ public static class Plugin
         // Free pluginID if we registered it
         if (pluginID != null)
         {
-            Marshal.FreeHGlobal((IntPtr)pluginID);
+            NativeMemory.Free(pluginID);
             pluginID = null;
         }
 
@@ -827,6 +791,20 @@ public static class Plugin
     #endregion
 
     #region Optional functions
+
+    [UnmanagedCallersOnly(EntryPoint = "ts3plugin_registerPluginID")]
+    public unsafe static void ts3plugin_registerPluginID(/*const */byte* id)
+    {
+        var charSpan = MemoryMarshal.CreateReadOnlySpanFromNullTerminated(id);
+        uint sz = (uint)charSpan.Length + 1;
+
+        pluginID = (byte*)NativeMemory.Alloc(sz);
+
+        // The id buffer will invalidate after exiting this function.
+        Unsafe.CopyBlock(pluginID, id, sz);
+
+        Console.WriteLine("TS-SE Plugin - Registered plugin ID: " + System.Text.Encoding.UTF8.GetString(charSpan));
+    }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_commandKeyword")]
     public unsafe static /*const */byte* ts3plugin_commandKeyword()
@@ -897,21 +875,22 @@ public static class Plugin
         {
             localClientId = 0;
             currentChannelId = 0;
-
-            lock (tsClients)
-                tsClients.Clear();
+            RemoveTSOnlyClients();
         }
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onClientMoveEvent")]
-    public unsafe static void ts3plugin_onClientMoveEvent(ulong serverConnectionHandlerID, ushort clientID, ulong oldChannelID, ulong newChannelID, Visibility visibility, byte* moveMessage)
+    public unsafe static void ts3plugin_onClientMoveEvent(ulong serverConnectionHandlerID, ushort clientID,
+        ulong oldChannelID, ulong newChannelID, Visibility visibility, byte* moveMessage)
     {
         // Client moved themself
         HandleClientMoved(serverConnectionHandlerID, clientID, oldChannelID, newChannelID);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onClientMoveMovedEvent")]
-    public unsafe static void ts3plugin_onClientMoveMovedEvent(ulong serverConnectionHandlerID, ushort clientID, ulong oldChannelID, ulong newChannelID, Visibility visibility, ushort moverID, /*const */byte* moverName, /*const */byte* moverUniqueIdentifier, /*const */byte* moveMessage)
+    public unsafe static void ts3plugin_onClientMoveMovedEvent(ulong serverConnectionHandlerID, ushort clientID,
+        ulong oldChannelID, ulong newChannelID, Visibility visibility,
+        ushort moverID, /*const */byte* moverName, /*const */byte* moverUniqueIdentifier, /*const */byte* moveMessage)
     {
         // Client was moved by another
         HandleClientMoved(serverConnectionHandlerID, clientID, oldChannelID, newChannelID);
@@ -941,8 +920,10 @@ public static class Plugin
             {
                 var name = GetClientName(clientID);
                 Console.WriteLine($"TS-SE Plugin - New client joined current channel. ClientID: {clientID}, ClientName: {name}, NewChannelID: {newChannelID}");
-                AddClientThreadSafe(clientID, name);
+                client = AddClientThreadSafe(clientID, name);
             }
+
+            SendLocalSteamIdToClient(client);
         }
         else if (oldChannelID == currentChannelId)
         {
@@ -965,7 +946,7 @@ public static class Plugin
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onTalkStatusChangeEvent")]
-    public unsafe static void ts3plugin_onTalkStatusChangeEvent(ulong serverConnectionHandlerID, int status, int isReceivedWhisper, ushort clientID)
+    public static void ts3plugin_onTalkStatusChangeEvent(ulong serverConnectionHandlerID, int status, int isReceivedWhisper, ushort clientID)
     {
         if ((TalkStatus)status == TalkStatus.STATUS_TALKING)
             SetClientIsWhispering(clientID, isReceivedWhisper != 0);
@@ -987,6 +968,61 @@ public static class Plugin
         //Console.WriteLine($"DistScale: {distanceScale}, DistFalloff: {distanceFalloff}, Dist: {dist}, Vol: {*volume}");
     }
 
+    [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onPluginCommandEvent")]
+    public unsafe static void ts3plugin_onPluginCommandEvent(ulong serverConnectionHandlerID, byte* pluginName, byte* pluginCommand,
+        ushort invokerClientID, byte* invokerName, byte* invokerUniqueIdentity)
+    {
+        // Commands can get sent to yourself
+        if (invokerClientID == localClientId)
+            return;
+
+        var pName = Marshal.PtrToStringUTF8((nint)pluginName);
+
+        if (pName != "SE-TS_Plugin") // Seems to use the dll name
+            return;
+
+        var cmd = Marshal.PtrToStringUTF8((nint)pluginCommand);
+        var invoker = Marshal.PtrToStringUTF8((nint)invokerName);
+
+        Console.WriteLine($"TS-SE Plugin - Received plugin command, PluginName: {pName}, Command: {cmd}, InvokerClientId: {invokerClientID}, InvokerName: {invoker}");
+
+        var tsClient = GetClientByClientId(invokerClientID);
+
+        if (tsClient == null)
+        {
+            Console.WriteLine($"TS-SE Plugin - Received plugin command from unregistered client, ClientId:{invokerClientID}, InvokerName:{invoker}");
+            return;
+        }
+
+        if (cmd != null && cmd.StartsWith("TSSE,SteamId:"))
+        {
+            if (ulong.TryParse(cmd.AsSpan("TSSE,SteamId:".Length), out ulong steamId))
+            {
+                tsClient.SteamID = steamId;
+
+                var gameClient = GetClientBySteamId(steamId);
+
+                if (gameClient != null)
+                {
+                    Console.WriteLine($"TS-SE Plugin - Merging clients, ClientId:{invokerClientID}, SteamId:{steamId}");
+
+                    tsClient.Position = gameClient.Position;
+
+                    lock (clients)
+                        clients.Remove(gameClient);
+                }
+                else
+                {
+                    Console.WriteLine($"TS-SE Plugin - Recieved SteamId for client, ClientId:{invokerClientID}, SteamId:{steamId}");
+                }
+
+                return;
+            }
+        }
+
+        Console.WriteLine($"TS-SE Plugin - Received invalid plugin command, Command:{cmd}, ClientId:{invokerClientID}");
+    }
+
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onClientDisplayNameChanged")]
     public unsafe static void ts3plugin_onClientDisplayNameChanged(ulong serverConnectionHandlerID, ushort clientID, /*const */byte* displayName, /*const */byte* uniqueClientIdentifier)
     {
@@ -1001,40 +1037,6 @@ public static class Plugin
         if (client != null)
         {
             client.ClientName = name;
-
-            var steamClient = name != null ? GetClientBySteamName(name) : null;
-
-            if (client.SteamID != 0)
-            {
-                if (steamClient != null)
-                {
-                    if (steamClient == client)
-                    {
-                        Console.WriteLine($"TS-SE Plugin - Client name changed but still matches Steam name. SteamId: {client.SteamID}, ClientId: {client.ClientID}, ClientName: {name}");
-                    }
-                    else
-                    {
-                        Console.WriteLine($"TS-SE Plugin - Client name conflicts with existing Steam client name. SteamId: {steamClient.SteamID}, ClientId: {client.ClientID}, ClientName: {name}");
-                    }
-                }
-                else
-                {
-                    Console.WriteLine($"TS-SE Plugin - A paired clients name was changed without conflict. SteamId: {client.SteamID}, ClientId: {client.ClientID}, ClientName: {name}");
-                    // TODO: Unpair?
-                }
-            }
-            else // Not already paired
-            {
-                if (steamClient != null)
-                {
-                    MergeClients(client, steamClient);
-                }
-                else
-                {
-                    //Console.WriteLine($"TS-SE Plugin - Unpaired client changed display name. ClientId: {client.ClientID}, NewClientName: {client.ClientName}");
-                    // Nothing to do
-                }
-            }
         }
         else
         {
