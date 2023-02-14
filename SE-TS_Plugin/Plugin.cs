@@ -8,7 +8,6 @@ using Sandbox.Engine.Networking;
 using Sandbox.Game.Entities.Character;
 using Sandbox.Game.World;
 using Sandbox.ModAPI;
-using VRage;
 using VRage.Game.ModAPI;
 using VRage.ModAPI;
 using VRage.Plugins;
@@ -240,59 +239,7 @@ public class Plugin : IPlugin
         tempPlayers.Clear();
 
         // Testing code for SE single player
-        {
-            //static IEnumerable<MyCharacter> GetCharacters()
-            //{
-            //    var entities = new HashSet<IMyEntity>();
-            //    MyAPIGateway.Entities.GetEntities(entities);
-
-            //    HashSet<IMyEntity> childEntities = null;
-
-            //    foreach (var item in entities)
-            //    {
-            //        switch (item)
-            //        {
-            //        case MyCharacter character:
-            //            yield return character;
-            //            break;
-            //        case IMyCubeGrid:
-            //            childEntities ??= new HashSet<IMyEntity>();
-            //            item.Hierarchy.GetChildrenRecursive(childEntities);
-
-            //            foreach (var child in childEntities)
-            //            {
-            //                if (child is MyCharacter _char)
-            //                    yield return _char;
-            //            }
-
-            //            childEntities.Clear();
-            //            break;
-            //        }
-            //    }
-            //}
-
-            //foreach (var character in GetCharacters())
-            //{
-            //    character.GetPlayerId(out var playerId);
-
-            //    if (playerId.SteamId == localPlayer.SteamUserId)
-            //        continue;
-
-            //    int index = currentPlayers.FindIndex(p => p.SteamID == playerId.SteamId);
-
-            //    if (index == -1)
-            //    {
-            //        var pos = ((IMyEntity)character).GetPosition();
-            //        pos += Vector3.Transform(mouthOffset, character.WorldMatrix.GetOrientation());
-
-            //        newPlayers.Add(new Player {
-            //            SteamID = playerId.SteamId,
-            //            DisplayName = character.GetIdentity().DisplayName,
-            //            Position = pos
-            //        });
-            //    }
-            //}
-        }
+        //AddOfflinePlayers(localPlayer);
 
         int newPlayersByteLength = 0;
 
@@ -441,5 +388,60 @@ public class Plugin : IPlugin
         }
 
         return false;
+    }
+
+    void AddOfflinePlayers(IMyPlayer localPlayer)
+    {
+        foreach (var character in GetCharactersRecursive())
+        {
+            character.GetPlayerId(out var playerId);
+
+            if (playerId.SteamId == localPlayer.SteamUserId)
+                continue;
+
+            int index = currentPlayers.FindIndex(p => p.SteamID == playerId.SteamId);
+
+            if (index == -1)
+            {
+                var pos = ((IMyEntity)character).GetPosition();
+                pos += Vector3.Transform(mouthOffset, character.WorldMatrix.GetOrientation());
+
+                newPlayers.Add(new Player {
+                    SteamID = playerId.SteamId,
+                    DisplayName = character.GetIdentity().DisplayName,
+                    Position = pos
+                });
+            }
+        }
+    }
+
+    static IEnumerable<MyCharacter> GetCharactersRecursive()
+    {
+        var entities = new HashSet<IMyEntity>();
+        MyAPIGateway.Entities.GetEntities(entities);
+
+        HashSet<IMyEntity> childEntities = null;
+
+        foreach (var item in entities)
+        {
+            switch (item)
+            {
+            case MyCharacter character:
+                yield return character;
+                break;
+            case IMyCubeGrid:
+                childEntities ??= new HashSet<IMyEntity>();
+                item.Hierarchy.GetChildrenRecursive(childEntities);
+
+                foreach (var child in childEntities)
+                {
+                    if (child is MyCharacter _char)
+                        yield return _char;
+                }
+
+                childEntities.Clear();
+                break;
+            }
+        }
     }
 }

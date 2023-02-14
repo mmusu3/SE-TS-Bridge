@@ -192,7 +192,16 @@ public static class Plugin
 
         PrintMessageToCurrentTab("TS-SE Plugin - Closed connection to Space Engineers.");
 
-        RemoveGameOnlyClients();
+        lock (clients)
+        {
+            foreach (var item in clients)
+            {
+                item.Position = default;
+
+                if (item.ClientID != 0)
+                    SetClientPos(item.ClientID, default);
+            }
+        }
 
         CreatePipe();
         goto connect;
@@ -201,7 +210,7 @@ public static class Plugin
 #pragma warning disable CS0649 // Field is never assigned to, and will always have its default value
     struct Header
     {
-        public int CheckValue;
+        public int CheckValue; // TODO: Use version instead
         public ulong LocalSteamId;
         public TS3_VECTOR Forward;
         public TS3_VECTOR Up;
@@ -313,6 +322,8 @@ public static class Plugin
 
     unsafe static void SendLocalSteamIdToCurrentChannel()
     {
+        //Console.WriteLine("TS-SE Plugin - SendLocalSteamIdToCurrentChannel()");
+
         IntPtr command = StringToHGlobalUTF8("TSSE,SteamId:" + localSteamId);
 
         functions.sendPluginCommand(connHandlerId, pluginID, (byte*)command, (int)PluginTargetMode.PluginCommandTarget_CURRENT_CHANNEL, null, null);
@@ -322,6 +333,8 @@ public static class Plugin
 
     unsafe static void SendLocalSteamIdToClient(Client client)
     {
+        //Console.WriteLine($"TS-SE Plugin - SendLocalSteamIdToClient({client.ClientID})");
+
         IntPtr command = StringToHGlobalUTF8("TSSE,SteamId:" + localSteamId);
         ushort* clientIds = stackalloc ushort[2] { client.ClientID, 0 };
 
@@ -348,40 +361,30 @@ public static class Plugin
                 if (localClientId != 0)
                     UpdateClientPosition(client);
             }
-            else
-            {
-                // TODO: Add client without name
-                Console.WriteLine($"TS-SE Plugin - Missing game client for SteamID: {state.SteamID}");
-            }
+            //else
+            //{
+            //    Console.WriteLine($"TS-SE Plugin - Missing game client for SteamID: {state.SteamID}");
+            //}
         }
     }
 
     static void ProcessRemovedPlayers(int numRemovedPlayers, ReadOnlySpan<byte> bytes)
     {
-        Console.WriteLine($"TS-SE Plugin - Removing {numRemovedPlayers} game clients.");
+        Console.WriteLine($"TS-SE Plugin - Removing {numRemovedPlayers} players.");
 
         lock (clients)
         {
             for (int i = 0; i < numRemovedPlayers; i++)
             {
                 ulong steamId = Read<ulong>(ref bytes);
+                var client = GetClientBySteamId(steamId);
 
-                for (int j = clients.Count - 1; j >= 0; j--)
+                if (client != null && client.ClientID != 0)
                 {
-                    var client = clients[j];
+                    //Console.WriteLine($"TS-SE Plugin - Resetting client position for ID: {client.ClientID}.");
 
-                    if (client.SteamID != steamId)
-                        continue;
-
-                    client.SteamID = 0;
                     client.Position = default;
-
-                    if (client.ClientID != 0)
-                        SetClientPos(client.ClientID, default);
-                    else
-                        clients.RemoveAt(j);
-
-                    break;
+                    SetClientPos(client.ClientID, default);
                 }
             }
         }
@@ -399,23 +402,15 @@ public static class Plugin
 
             bytes = bytes.Slice(nameLength * sizeof(char));
 
+            var pos = Read<TS3_VECTOR>(ref bytes);
             var client = GetClientBySteamId(id);
 
-            if (client == null)
-            {
-                client = new Client { SteamID = id };
-
-                lock (clients)
-                    clients.Add(client);
-
-                Console.WriteLine($"TS-SE Plugin - Created client from Steam ID. SteamId: {id}, SteamName:{name}");
-            }
-            else
+            if (client != null)
             {
                 Console.WriteLine($"TS-SE Plugin - Matching client found for Steam ID. SteamId: {id}, SteamName:{name}");
-            }
 
-            client.Position = Read<TS3_VECTOR>(ref bytes);
+                client.Position = pos;
+            }
         }
     }
 
@@ -487,32 +482,22 @@ public static class Plugin
 
         if (!removed)
             Console.WriteLine($"TS-SE Plugin - Failed to unregister client. ClientId: {client.ClientID}");
-
-        client.ClientID = 0;
-        client.ClientName = null;
     }
 
-    static void RemoveTSOnlyClients()
+    static void RemoveAllClients()
     {
         lock (clients)
         {
-            for (int i = clients.Count - 1; i >= 0; i--)
+            if (clients.Count == 0)
             {
-                if (clients[i].SteamID == 0)
-                    clients.RemoveAt(i);
+                Console.WriteLine($"TS-SE Plugin - Zero clients to remove.");
+                return;
             }
-        }
-    }
 
-    static void RemoveGameOnlyClients()
-    {
-        lock (clients)
-        {
-            for (int i = clients.Count - 1; i >= 0; i--)
-            {
-                if (clients[i].ClientID == 0)
-                    clients.RemoveAt(i);
-            }
+            Console.WriteLine($"TS-SE Plugin - Removing all {clients.Count} clients.");
+
+            clients.Clear();
+            // TODO: Does this need to SetClientPos?
         }
     }
 
@@ -603,7 +588,10 @@ public static class Plugin
     unsafe static void SetClientPos(ushort clientId, TS3_VECTOR position)
     {
         if (clientId == 0)
+        {
+            Console.WriteLine($"TS-SE Plugin - Tried to set position of client ID 0.");
             return;
+        }
 
         //Console.WriteLine($"TS-SE Plugin - Setting position of client {clientId} to {{{position.x}, {position.y}, {position.z}}}.");
 
@@ -628,7 +616,7 @@ public static class Plugin
             return;
         }
 
-        RemoveTSOnlyClients();
+        RemoveAllClients();
 
         int numAdded = 0;
 
@@ -651,6 +639,8 @@ public static class Plugin
 
         if (numAdded != 0)
             Console.WriteLine($"TS-SE Plugin - Added {numAdded} clients.");
+
+        Console.WriteLine($"TS-SE Plugin - There are {clients.Count} total clients.");
 
         err = (Ts3ErrorType)functions.freeMemory(clientList);
 
@@ -861,6 +851,8 @@ public static class Plugin
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onConnectStatusChangeEvent")]
     public unsafe static void ts3plugin_onConnectStatusChangeEvent(ulong serverConnectionHandlerID, int newStatus, uint errorNumber)
     {
+        //Console.WriteLine($"TS-SE Plugin - ConnectStatusChangeEvent. NewStatus: {newStatus}");
+
         var connStatus = (ConnectStatus)newStatus;
 
         if (connStatus == ConnectStatus.STATUS_CONNECTION_ESTABLISHED)
@@ -875,7 +867,7 @@ public static class Plugin
         {
             localClientId = 0;
             currentChannelId = 0;
-            RemoveTSOnlyClients();
+            RemoveAllClients();
         }
     }
 
@@ -906,7 +898,10 @@ public static class Plugin
             Console.WriteLine($"TS-SE Plugin - Current channel changed. NewChannelID: {newChannelID}");
 
             if (newChannelID != 0)
+            {
                 RefetchTSClients();
+                SendLocalSteamIdToCurrentChannel();
+            }
         }
         else if (newChannelID == currentChannelId)
         {
@@ -978,7 +973,7 @@ public static class Plugin
 
         var pName = Marshal.PtrToStringUTF8((nint)pluginName);
 
-        if (pName != "SE-TS_Plugin") // Seems to use the dll name
+        if (pName != "TS-SE_Plugin") // Seems to use the dll name
             return;
 
         var cmd = Marshal.PtrToStringUTF8((nint)pluginCommand);
@@ -986,9 +981,9 @@ public static class Plugin
 
         Console.WriteLine($"TS-SE Plugin - Received plugin command, PluginName: {pName}, Command: {cmd}, InvokerClientId: {invokerClientID}, InvokerName: {invoker}");
 
-        var tsClient = GetClientByClientId(invokerClientID);
+        var client = GetClientByClientId(invokerClientID);
 
-        if (tsClient == null)
+        if (client == null)
         {
             Console.WriteLine($"TS-SE Plugin - Received plugin command from unregistered client, ClientId:{invokerClientID}, InvokerName:{invoker}");
             return;
@@ -998,24 +993,8 @@ public static class Plugin
         {
             if (ulong.TryParse(cmd.AsSpan("TSSE,SteamId:".Length), out ulong steamId))
             {
-                tsClient.SteamID = steamId;
-
-                var gameClient = GetClientBySteamId(steamId);
-
-                if (gameClient != null)
-                {
-                    Console.WriteLine($"TS-SE Plugin - Merging clients, ClientId:{invokerClientID}, SteamId:{steamId}");
-
-                    tsClient.Position = gameClient.Position;
-
-                    lock (clients)
-                        clients.Remove(gameClient);
-                }
-                else
-                {
-                    Console.WriteLine($"TS-SE Plugin - Recieved SteamId for client, ClientId:{invokerClientID}, SteamId:{steamId}");
-                }
-
+                Console.WriteLine($"TS-SE Plugin - Recieved SteamId for client, ClientId:{invokerClientID}, SteamId:{steamId}");
+                client.SteamID = steamId;
                 return;
             }
         }
