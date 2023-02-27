@@ -4,10 +4,14 @@ using System.Collections.Generic;
 using System.IO.Pipes;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
 using Sandbox.Engine.Networking;
+using Sandbox.Game.Entities;
 using Sandbox.Game.Entities.Character;
 using Sandbox.Game.World;
 using Sandbox.ModAPI;
+using VRage.Game.Components;
 using VRage.Game.ModAPI;
 using VRage.ModAPI;
 using VRage.Plugins;
@@ -18,26 +22,41 @@ namespace SETSPlugin;
 
 public class Plugin : IPlugin
 {
-    class Player
+    internal class PlayerInfo
     {
-        public IMyPlayer InternalPlayer;
+        public IMyPlayer? InternalPlayer;
         public ulong SteamID;
         public string DisplayName;
         public Vector3D Position;
+        public bool HasConnection;
+
+        public PlayerInfo(IMyPlayer? internalPlayer, ulong steamID, string displayName, Vector3D position)
+        {
+            InternalPlayer = internalPlayer;
+            SteamID = steamID;
+            DisplayName = displayName;
+            Position = position;
+            HasConnection = true;
+        }
     }
 
-    List<IMyPlayer> tempPlayers = new();
-    List<Player> currentPlayers = new();
-    List<Player> newPlayers = new();
-    List<Player> removedPlayers = new();
+    List<IMyPlayer> tempPlayers = new(); // Reused list
+    List<PlayerInfo> currentPlayers = new();
+    List<PlayerInfo> newPlayers = new();
+    List<PlayerInfo> removedPlayers = new();
     NamedPipeServerStream pipeStream;
-    IAsyncResult connectResult;
+    CancellationTokenSource pipeCancellation;
+    Task? connectTask;
 
     readonly Vector3 mouthOffset = new Vector3(0, 1.6f, -0.1f); // Approximate mouth offset
 
-    struct Header
+    const int minor = 1;
+    const int patch = 0;
+    const int CurrentVersion = (0xABCD << 16) | (minor << 8) | patch; // 16 bits of magic value, 8 bits of major, 8 bits of minor
+
+    struct PlayerStatesHeader
     {
-        public int CheckValue;
+        public int Version;
         public ulong LocalSteamId;
         public Vector3 Forward;
         public Vector3 Up;
@@ -46,15 +65,27 @@ public class Plugin : IPlugin
         public int NewPlayerCount;
         public int NewPlayerByteLength;
 
-        public unsafe static readonly int Size = sizeof(Header);
+        public unsafe static readonly int Size = sizeof(PlayerStatesHeader);
     }
 
     struct ClientState
     {
         public ulong SteamID;
         public Vector3 Position;
+        public bool HasConnection;
 
         public unsafe static readonly int Size = sizeof(ClientState);
+    }
+
+    const ushort mpMessageId = 42691; // Picked at random, may conflict with other mods.
+
+    Action<ushort, byte[], ulong, bool> mpMessageHandler;
+
+    public Plugin()
+    {
+        pipeStream = null!;
+        pipeCancellation = null!;
+        mpMessageHandler = MPMessageHandler;
     }
 
     public void Init(object gameInstance)
@@ -63,6 +94,7 @@ public class Plugin : IPlugin
 
         BeginConnection();
 
+        MySession.OnLoading += MySession_OnLoading;
         MySession.OnUnloading += MySession_OnUnloading;
 
         MyLog.Default.WriteLine("[SE-TS Bridge] Initialized.");
@@ -73,37 +105,37 @@ public class Plugin : IPlugin
         MyLog.Default.WriteLine("[SE-TS Bridge] Beginning connection.");
 
         pipeStream = new NamedPipeServerStream("09C842DD-F683-4798-A95F-88B0981265BE", PipeDirection.Out, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
-        connectResult = pipeStream.BeginWaitForConnection(OnPipeConnected, null);
+        pipeCancellation = new CancellationTokenSource();
+        connectTask = pipeStream.WaitForConnectionAsync(pipeCancellation.Token).ContinueWith(OnPipeConnected);
     }
 
-    void OnPipeConnected(IAsyncResult result)
+    void OnPipeConnected(Task task)
     {
-        try
-        {
-            pipeStream.EndWaitForConnection(result);
-        }
-        catch (ObjectDisposedException)
-        {
+        connectTask = null;
+
+        if (task.IsCanceled || task.IsFaulted)
             return;
-        }
-        finally
-        {
-            connectResult = null;
-        }
 
         MyLog.Default.WriteLine($"[SE-TS Bridge] Established connection with TeamSpeak plugin.");
         MyAPIGateway.Utilities?.InvokeOnGameThread(() => MyAPIGateway.Utilities?.ShowMessage("SE-TS Bridge", "Established connection with TeamSpeak plugin."), "SE-TS Bridge");
     }
 
+    void MySession_OnLoading()
+    {
+        MyAPIGateway.Multiplayer.RegisterSecureMessageHandler(mpMessageId, mpMessageHandler);
+    }
+
     void MySession_OnUnloading()
     {
+        MyAPIGateway.Multiplayer.UnregisterSecureMessageHandler(mpMessageId, mpMessageHandler);
+
         if (!pipeStream.IsConnected)
             return;
 
         MyLog.Default.WriteLine($"[SE-TS Bridge] Removing {currentPlayers.Count} players due to session unload.");
 
-        var header = new Header {
-            CheckValue = 0x12ABCDEF,
+        var header = new PlayerStatesHeader {
+            Version = CurrentVersion,
             LocalSteamId = MyGameService.UserId,
             Forward = Vector3.Forward,
             Up = Vector3.Up,
@@ -114,7 +146,7 @@ public class Plugin : IPlugin
         };
 
         var arrayPool = ArrayPool<byte>.Shared;
-        int dataSize = Header.Size + sizeof(ulong) * currentPlayers.Count;
+        int dataSize = PlayerStatesHeader.Size + sizeof(ulong) * currentPlayers.Count;
         var buffer = arrayPool.Rent(dataSize);
         var span = buffer.AsSpan(0, dataSize);
         Write(ref span, header);
@@ -141,22 +173,79 @@ public class Plugin : IPlugin
     {
         MyLog.Default.WriteLine("[SE-TS Bridge] Disposing.");
 
+        MySession.OnLoading -= MySession_OnLoading;
         MySession.OnUnloading -= MySession_OnUnloading;
 
         if (pipeStream.IsConnected)
             pipeStream.Disconnect();
+        else
+            pipeCancellation.Cancel();
 
         pipeStream.Dispose();
+        pipeCancellation.Dispose();
+
         currentPlayers.Clear();
 
         MyLog.Default.WriteLine("[SE-TS Bridge] Disposed.");
+    }
+
+    void MPMessageHandler(ushort handlerId, byte[] message, ulong steamId, bool fromServer)
+    {
+        // If the message does not match what is expected there might be another mod using the same handlerId.
+
+        if (!fromServer)
+            return; // Should never get messages from clients.
+
+        if (message.Length < sizeof(int))
+            return; // Message must always at least specify the number of bytes.
+
+        ReadOnlySpan<byte> bytes = message;
+
+        int numBytes = Read<int>(ref bytes);
+
+        if (numBytes != message.Length)
+            return; // Invalid message.
+
+        int numPlayers = Read<int>(ref bytes);
+        int expectedBytes = numPlayers * (sizeof(ulong) + sizeof(bool));
+
+        if (bytes.Length != expectedBytes)
+            return; // Invalid message.
+
+        for (int i = 0; i < numPlayers; i++)
+        {
+            ulong playerId = Read<ulong>(ref bytes);
+            bool hasConnection = Read<bool>(ref bytes);
+            var player = GetPlayerBySteamId(playerId);
+
+            if (player != null)
+                player.HasConnection = hasConnection;
+        }
+    }
+
+    unsafe static T Read<T>(ref ReadOnlySpan<byte> span) where T : unmanaged
+    {
+        var value = MemoryMarshal.Read<T>(span);
+        span = span.Slice(sizeof(T));
+        return value;
+    }
+
+    PlayerInfo? GetPlayerBySteamId(ulong steamId)
+    {
+        foreach (var item in currentPlayers)
+        {
+            if (item.SteamID == steamId)
+                return item;
+        }
+
+        return null;
     }
 
     public void Update()
     {
         if (!pipeStream.IsConnected)
         {
-            if (connectResult == null || connectResult.IsCompleted)
+            if (connectTask == null || connectTask.IsCompleted || connectTask.IsFaulted)
             {
                 MyLog.Default.WriteLine("[SE-TS Bridge] Restarting connection.");
                 MyAPIGateway.Utilities?.ShowMessage("SE-TS Bridge", "Restarting connection.");
@@ -197,46 +286,11 @@ public class Plugin : IPlugin
         }
     }
 
-    void SendUpdate(IMyPlayerCollection pc, IMySession session)
+    void SendUpdate(IMyPlayerCollection playerCollection, IMySession session)
     {
         var localPlayer = session.LocalHumanPlayer;
 
-        pc.GetPlayers(tempPlayers);
-
-        for (int i = 0; i < currentPlayers.Count; i++)
-        {
-            var item = currentPlayers[i];
-
-            if (item.InternalPlayer != null && !PlayerExists(tempPlayers, item.InternalPlayer))
-            {
-                removedPlayers.Add(item);
-                currentPlayers.RemoveAt(i--);
-            }
-        }
-
-        foreach (var item in tempPlayers)
-        {
-            if (item == localPlayer || item.IsBot || PlayerExists(currentPlayers, item))
-                continue;
-
-            var c = item.Character;
-
-            Vector3D pos;
-
-            if (c != null)
-                pos = c.GetPosition() + Vector3.Transform(mouthOffset, c.WorldMatrix.GetOrientation());
-            else
-                pos = item.GetPosition();
-
-            newPlayers.Add(new Player {
-                InternalPlayer = item,
-                SteamID = item.SteamUserId,
-                DisplayName = item.DisplayName,
-                Position = pos
-            });
-        }
-
-        tempPlayers.Clear();
+        AddNewPlayers(playerCollection, localPlayer);
 
         // Testing code for SE single player
         //AddOfflinePlayers(localPlayer);
@@ -251,6 +305,7 @@ public class Plugin : IPlugin
                 newPlayersByteLength += sizeof(int);
                 newPlayersByteLength += item.DisplayName.Length * sizeof(char);
                 newPlayersByteLength += sizeof(float) * 3; // sizeof(Vector3);
+                newPlayersByteLength += sizeof(bool);
             }
         }
 
@@ -259,8 +314,8 @@ public class Plugin : IPlugin
         var localOrient = camera.WorldMatrix.Rotation;
         var inverseLocalOrient = Quaternion.Inverse(Quaternion.CreateFromRotationMatrix(camera.WorldMatrix.GetOrientation()));
 
-        var header = new Header {
-            CheckValue = 0x12ABCDEF,
+        var header = new PlayerStatesHeader {
+            Version = CurrentVersion,
             LocalSteamId = localPlayer.SteamUserId,
             Forward = localOrient.Forward,
             Up = localOrient.Up,
@@ -271,7 +326,7 @@ public class Plugin : IPlugin
         };
 
         var arrayPool = ArrayPool<byte>.Shared;
-        int dataSize = Header.Size
+        int dataSize = PlayerStatesHeader.Size
             + ClientState.Size * currentPlayers.Count
             + sizeof(ulong) * removedPlayers.Count
             + newPlayersByteLength;
@@ -310,7 +365,8 @@ public class Plugin : IPlugin
 
                 var state = new ClientState {
                     SteamID = item.SteamID,
-                    Position = relPos
+                    Position = relPos,
+                    HasConnection = item.HasConnection
                 };
 
                 Write(ref span, state);
@@ -344,6 +400,7 @@ public class Plugin : IPlugin
                 relPos = Vector3.Transform(relPos, inverseLocalOrient);
 
                 Write(ref span, relPos);
+                Write(ref span, item.HasConnection);
 
                 currentPlayers.Add(item);
             }
@@ -368,6 +425,41 @@ public class Plugin : IPlugin
         span = span.Slice(sizeof(T));
     }
 
+    void AddNewPlayers(IMyPlayerCollection playerCollection, IMyPlayer localPlayer)
+    {
+        playerCollection.GetPlayers(tempPlayers);
+
+        for (int i = 0; i < currentPlayers.Count; i++)
+        {
+            var item = currentPlayers[i];
+
+            if (item.InternalPlayer != null && !PlayerExists(tempPlayers, item.InternalPlayer))
+            {
+                removedPlayers.Add(item);
+                currentPlayers.RemoveAt(i--);
+            }
+        }
+
+        foreach (var item in tempPlayers)
+        {
+            if (item == localPlayer || item.IsBot || PlayerExists(currentPlayers, item))
+                continue;
+
+            var c = item.Character;
+
+            Vector3D pos;
+
+            if (c != null)
+                pos = c.GetPosition() + Vector3.Transform(mouthOffset, c.WorldMatrix.GetOrientation());
+            else
+                pos = item.GetPosition();
+
+            newPlayers.Add(new PlayerInfo(item, item.SteamUserId, item.DisplayName, pos));
+        }
+
+        tempPlayers.Clear();
+    }
+
     static bool PlayerExists(List<IMyPlayer> players, IMyPlayer player)
     {
         foreach (var item in players)
@@ -379,9 +471,9 @@ public class Plugin : IPlugin
         return false;
     }
 
-    static bool PlayerExists(List<Player> players, IMyPlayer player)
+    static bool PlayerExists(List<PlayerInfo> players, IMyPlayer player)
     {
-        foreach (Player item in players)
+        foreach (PlayerInfo item in players)
         {
             if (item.SteamID == player.SteamUserId)
                 return true;
@@ -406,21 +498,14 @@ public class Plugin : IPlugin
                 var pos = ((IMyEntity)character).GetPosition();
                 pos += Vector3.Transform(mouthOffset, character.WorldMatrix.GetOrientation());
 
-                newPlayers.Add(new Player {
-                    SteamID = playerId.SteamId,
-                    DisplayName = character.GetIdentity().DisplayName,
-                    Position = pos
-                });
+                newPlayers.Add(new PlayerInfo(null, playerId.SteamId, character.GetIdentity().DisplayName, pos));
             }
         }
     }
 
     static IEnumerable<MyCharacter> GetCharactersRecursive()
     {
-        var entities = new HashSet<IMyEntity>();
-        MyAPIGateway.Entities.GetEntities(entities);
-
-        HashSet<IMyEntity> childEntities = null;
+        var entities = MyEntities.GetEntities();
 
         foreach (var item in entities)
         {
@@ -429,17 +514,28 @@ public class Plugin : IPlugin
             case MyCharacter character:
                 yield return character;
                 break;
-            case IMyCubeGrid:
-                childEntities ??= new HashSet<IMyEntity>();
-                item.Hierarchy.GetChildrenRecursive(childEntities);
+            case MyCubeGrid:
+                foreach (var child in GetCharactersRecursive(item.Hierarchy))
+                    yield return child;
+                break;
+            }
+        }
+    }
 
-                foreach (var child in childEntities)
-                {
-                    if (child is MyCharacter _char)
-                        yield return _char;
-                }
+    static IEnumerable<MyCharacter> GetCharactersRecursive(MyHierarchyComponentBase hierarchy)
+    {
+        foreach (var item in hierarchy.Children)
+        {
+            var child = item.Container.Entity;
 
-                childEntities.Clear();
+            switch (child)
+            {
+            case MyCharacter character:
+                yield return character;
+                break;
+            default:
+                foreach (var character in GetCharactersRecursive(child.Hierarchy))
+                    yield return character;
                 break;
             }
         }

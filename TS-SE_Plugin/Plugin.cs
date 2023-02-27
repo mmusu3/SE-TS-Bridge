@@ -11,10 +11,14 @@ namespace TSSEPlugin;
 
 public static class Plugin
 {
+    const int minor = 1;
+    const int patch = 0;
+    const int CurrentVersion = (0xABCD << 16) | (minor << 8) | patch; // 16 bits of magic value, 8 bits of major, 8 bits of minor
+
     static readonly string PluginName = "TS-SE Plugin";
     static readonly IntPtr PluginNamePtr = StringToHGlobalUTF8(PluginName);
 
-    static readonly string PluginVersion = "1.0.8";
+    static readonly string PluginVersion = $"1.{minor}.{patch}";
     static readonly IntPtr PluginVersionPtr = StringToHGlobalUTF8(PluginVersion);
 
     static readonly string PluginAuthor = "Remaarn";
@@ -39,6 +43,9 @@ public static class Plugin
     static float distanceScale = 0.3f;
     static float distanceFalloff = 0.9f;
 
+    static ulong localSteamId = 0;
+    static bool useAntennaConnections = true;
+
     static NamedPipeClientStream pipeStream = null!;
     static CancellationTokenSource cancellationTokenSource = null!;
     static Task runningTask = null!;
@@ -49,10 +56,9 @@ public static class Plugin
         public ushort ClientID;
         public string? ClientName;
         public TS3_VECTOR Position;
+        public bool HasConnection;
         public bool IsWhispering;
     }
-
-    static ulong localSteamId = 0;
 
     static readonly List<Client> clients = new();
 
@@ -93,6 +99,7 @@ public static class Plugin
 
     static void CreatePipe()
     {
+        // TODO: Allow remote computer
         pipeStream = new NamedPipeClientStream(".", "09C842DD-F683-4798-A95F-88B0981265BE", PipeDirection.In, PipeOptions.Asynchronous);
         cancellationTokenSource = new CancellationTokenSource();
     }
@@ -158,14 +165,18 @@ public static class Plugin
                 if (result.Result == UpdateResult.OK)
                     continue;
 
-                else if (result.Result == UpdateResult.Corrupt)
-                    Console.WriteLine($"TS-SE Plugin - Update failed with result {result.Result}. {result.Error}");
-
-                else if (result.Result == UpdateResult.Canceled)
+                switch (result.Result)
+                {
+                case UpdateResult.Canceled:
                     Console.WriteLine($"TS-SE Plugin - Update was canceled.");
-
-                else if (result.Result == UpdateResult.Closed)
+                    break;
+                case UpdateResult.Closed:
                     Console.WriteLine($"TS-SE Plugin - Connection was closed. {result.Error}");
+                    break;
+                case UpdateResult.Corrupt:
+                    Console.WriteLine($"TS-SE Plugin - Update failed with result {result.Result}. {result.Error}");
+                    break;
+                }
 
                 break;
             }
@@ -204,13 +215,14 @@ public static class Plugin
         }
 
         CreatePipe();
+
         goto connect;
     }
 
 #pragma warning disable CS0649 // Field is never assigned to, and will always have its default value
-    struct Header
+    struct PlayerStatesHeader
     {
-        public int CheckValue; // TODO: Use version instead
+        public int Version;
         public ulong LocalSteamId;
         public TS3_VECTOR Forward;
         public TS3_VECTOR Up;
@@ -219,13 +231,14 @@ public static class Plugin
         public int NewPlayerCount;
         public int NewPlayerByteLength;
 
-        public unsafe static readonly int Size = sizeof(Header);
+        public unsafe static readonly int Size = sizeof(PlayerStatesHeader);
     }
 
     struct ClientState
     {
         public ulong SteamID;
         public TS3_VECTOR Position;
+        public bool HasConnection;
 
         public unsafe static readonly int Size = sizeof(ClientState);
     }
@@ -241,9 +254,9 @@ public static class Plugin
 
     async static ValueTask<(UpdateResult Result, string? Error)> Update(CancellationToken cancellationToken)
     {
-        using var headerBuffer = memPool.Rent(Header.Size);
+        using var headerBuffer = memPool.Rent(PlayerStatesHeader.Size);
         var headerMemory = headerBuffer.Memory;
-        int bytes = await pipeStream.ReadAsync(headerMemory.Slice(0, Header.Size), cancellationToken).ConfigureAwait(false);
+        int bytes = await pipeStream.ReadAsync(headerMemory.Slice(0, PlayerStatesHeader.Size), cancellationToken).ConfigureAwait(false);
 
         if (cancellationToken.IsCancellationRequested)
             return (UpdateResult.Canceled, null);
@@ -251,12 +264,12 @@ public static class Plugin
         if (bytes == 0)
             return (UpdateResult.Closed, "Pipe returned zero bytes.");
 
-        if (bytes != Header.Size)
-            return (UpdateResult.Corrupt, $"Expected {Header.Size} bytes, got {bytes}");
+        if (bytes != PlayerStatesHeader.Size)
+            return (UpdateResult.Corrupt, $"Expected {PlayerStatesHeader.Size} bytes, got {bytes}");
 
-        var header = MemoryMarshal.Read<Header>(headerMemory.Span);
+        var header = MemoryMarshal.Read<PlayerStatesHeader>(headerMemory.Span);
 
-        if (header.CheckValue != 0x12ABCDEF)
+        if (header.Version != CurrentVersion)
             return (UpdateResult.Corrupt, "Invalid data");
 
         bool steamIdChanged = header.LocalSteamId != localSteamId;
@@ -357,6 +370,7 @@ public static class Plugin
             if (client != null)
             {
                 client.Position = state.Position;
+                client.HasConnection = state.HasConnection;
 
                 if (localClientId != 0)
                     UpdateClientPosition(client);
@@ -392,7 +406,7 @@ public static class Plugin
 
     static void ProcessNewPlayers(int numNewPlayers, ReadOnlySpan<byte> bytes)
     {
-        Console.WriteLine($"TS-SE Plugin - Received {numNewPlayers} new game clients.");
+        Console.WriteLine($"TS-SE Plugin - Received {numNewPlayers} new players.");
 
         for (int i = 0; i < numNewPlayers; i++)
         {
@@ -403,13 +417,15 @@ public static class Plugin
             bytes = bytes.Slice(nameLength * sizeof(char));
 
             var pos = Read<TS3_VECTOR>(ref bytes);
+            bool hasConnection = Read<bool>(ref bytes);
             var client = GetClientBySteamId(id);
 
             if (client != null)
             {
-                Console.WriteLine($"TS-SE Plugin - Matching client found for Steam ID. SteamId: {id}, SteamName:{name}");
+                Console.WriteLine($"TS-SE Plugin - Matching client found for Steam ID. SteamId: {id}, SteamName: {name}");
 
                 client.Position = pos;
+                client.HasConnection = hasConnection;
             }
         }
     }
@@ -510,13 +526,60 @@ public static class Plugin
 
         //Console.WriteLine($"TS-SE Plugin - Setting client {clientId} whispering state to {isWhispering}");
 
-        client.IsWhispering = isWhispering;
-        UpdateClientPosition(client);
+        if (isWhispering != client.IsWhispering)
+        {
+            client.IsWhispering = isWhispering;
+            UpdateClientPosition(client);
+        }
     }
 
     static void UpdateClientPosition(Client client)
     {
-        SetClientPos(client.ClientID, client.IsWhispering ? default : client.Position);
+        SetClientPos(client.ClientID, client.IsWhispering && (client.HasConnection || !useAntennaConnections) ? default : client.Position);
+    }
+
+    unsafe static void RefetchTSClients()
+    {
+        Console.WriteLine("TS-SE Plugin - Refetching client list.");
+
+        ushort* clientList;
+        var err = (Ts3ErrorType)functions.getChannelClientList(connHandlerId, currentChannelId, &clientList);
+
+        if (err != Ts3ErrorType.ERROR_ok)
+        {
+            Console.WriteLine($"TS-SE Plugin - Failed to get client list. Error: {err}");
+            return;
+        }
+
+        RemoveAllClients();
+
+        int numAdded = 0;
+
+        lock (clients)
+        {
+            int i = 0;
+            ushort id;
+
+            while ((id = clientList[i++]) != 0)
+            {
+                if (id == localClientId)
+                    continue;
+
+                var name = GetClientName(id);
+                AddClient(id, name);
+                numAdded++;
+            }
+        }
+
+        if (numAdded != 0)
+            Console.WriteLine($"TS-SE Plugin - Added {numAdded} clients.");
+
+        Console.WriteLine($"TS-SE Plugin - There are {clients.Count} total clients.");
+
+        err = (Ts3ErrorType)functions.freeMemory(clientList);
+
+        if (err != Ts3ErrorType.ERROR_ok)
+            Console.WriteLine($"TS-SE Plugin - Failed to free client list. Error: {err}");
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -601,51 +664,6 @@ public static class Plugin
 
         if (err != Ts3ErrorType.ERROR_ok)
             Console.WriteLine($"TS-SE Plugin - Failed to set client pos to {{{position.x}, {position.y}, {position.z}}}. Error: {err}");
-    }
-
-    unsafe static void RefetchTSClients()
-    {
-        Console.WriteLine("TS-SE Plugin - Refetching client list.");
-
-        ushort* clientList;
-        var err = (Ts3ErrorType)functions.getChannelClientList(connHandlerId, currentChannelId, &clientList);
-
-        if (err != Ts3ErrorType.ERROR_ok)
-        {
-            Console.WriteLine($"TS-SE Plugin - Failed to get client list. Error: {err}");
-            return;
-        }
-
-        RemoveAllClients();
-
-        int numAdded = 0;
-
-        lock (clients)
-        {
-            int i = 0;
-            ushort id;
-
-            while ((id = clientList[i++]) != 0)
-            {
-                if (id == localClientId)
-                    continue;
-
-                var name = GetClientName(id);
-
-                AddClient(id, name);
-                numAdded++;
-            }
-        }
-
-        if (numAdded != 0)
-            Console.WriteLine($"TS-SE Plugin - Added {numAdded} clients.");
-
-        Console.WriteLine($"TS-SE Plugin - There are {clients.Count} total clients.");
-
-        err = (Ts3ErrorType)functions.freeMemory(clientList);
-
-        if (err != Ts3ErrorType.ERROR_ok)
-            Console.WriteLine($"TS-SE Plugin - Failed to free client list. Error: {err}");
     }
 
     unsafe static bool GetLocalClientAndChannelID()
@@ -802,6 +820,7 @@ public static class Plugin
         return (byte*)CommandKeywordPtr;
     }
 
+    // Plugin processes console command. Return 0 if plugin handled the command, 1 if not handled.
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_processCommand")]
     public unsafe static int ts3plugin_processCommand(ulong serverConnectionHandlerID, /*const */byte* command)
     {
@@ -810,33 +829,56 @@ public static class Plugin
         if (cmd == null)
             return 1;
 
-        if (cmd.StartsWith("distancescale ", StringComparison.OrdinalIgnoreCase))
-        {
-            if (float.TryParse(cmd.AsSpan()["distancescale ".Length..].Trim(), out float value))
-            {
-                distanceScale = value;
+        int spaceIndex = cmd.IndexOf(' ');
 
-                if (Set3DSettings(distanceScale, 1))
-                    PrintMessageToCurrentTab($"Setting distance scale to {distanceScale}");
-                else
-                    PrintMessageToCurrentTab($"Error, failed to set distance scale value.");
-            }
-            else
-            {
-                PrintMessageToCurrentTab($"Error, failed to parse value.");
-            }
-        }
-        else if (cmd.StartsWith("distancefalloff ", StringComparison.OrdinalIgnoreCase))
+        switch (cmd.Substring(0, spaceIndex).ToLowerInvariant())
         {
-            if (float.TryParse(cmd.AsSpan()["distancefalloff ".Length..].Trim(), out float value))
+        case "distancescale":
             {
-                distanceFalloff = value;
-                PrintMessageToCurrentTab($"Setting distance falloff to {distanceFalloff}");
+                if (float.TryParse(cmd.AsSpan(spaceIndex).Trim(), out float value))
+                {
+                    distanceScale = value;
+
+                    if (Set3DSettings(distanceScale, 1))
+                        PrintMessageToCurrentTab($"Setting distance scale to {value}");
+                    else
+                        PrintMessageToCurrentTab($"Error, failed to set distance scale value.");
+                }
+                else
+                {
+                    PrintMessageToCurrentTab($"Error, failed to parse value.");
+                }
+                break;
             }
-            else
+        case "distancefalloff":
             {
-                PrintMessageToCurrentTab($"Error, failed to parse value.");
+                if (float.TryParse(cmd.AsSpan(spaceIndex).Trim(), out float value))
+                {
+                    distanceFalloff = value;
+                    PrintMessageToCurrentTab($"Setting distance falloff to {value}");
+                }
+                else
+                {
+                    PrintMessageToCurrentTab($"Error, failed to parse value.");
+                }
+                break;
             }
+        case "useantennas":
+            {
+                if (bool.TryParse(cmd.AsSpan(spaceIndex).Trim(), out bool value))
+                {
+                    useAntennaConnections = value;
+                    PrintMessageToCurrentTab($"Setting use antennas to {value}");
+                }
+                else
+                {
+                    PrintMessageToCurrentTab($"Error, failed to parse value.");
+                }
+                break;
+            }
+        default:
+            PrintMessageToCurrentTab($"Invalid command {cmd}");
+            break;
         }
 
         return 0;
@@ -879,6 +921,13 @@ public static class Plugin
         HandleClientMoved(serverConnectionHandlerID, clientID, oldChannelID, newChannelID);
     }
 
+    [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onClientMoveTimeoutEvent")]
+    public unsafe static void ts3plugin_onClientMoveTimeoutEvent(ulong serverConnectionHandlerID, ushort clientID,
+        ulong oldChannelID, ulong newChannelID, Visibility visibility, /*const */byte* timeoutMessage)
+    {
+        HandleClientMoved(serverConnectionHandlerID, clientID, oldChannelID, newChannelID);
+    }
+
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onClientMoveMovedEvent")]
     public unsafe static void ts3plugin_onClientMoveMovedEvent(ulong serverConnectionHandlerID, ushort clientID,
         ulong oldChannelID, ulong newChannelID, Visibility visibility,
@@ -888,12 +937,29 @@ public static class Plugin
         HandleClientMoved(serverConnectionHandlerID, clientID, oldChannelID, newChannelID);
     }
 
+    [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onClientKickFromChannelEvent")]
+    public unsafe static void ts3plugin_onClientKickFromChannelEvent(ulong serverConnectionHandlerID, ushort clientID,
+        ulong oldChannelID, ulong newChannelID, Visibility visibility,
+        ushort kickerID, /*const */byte* kickerName, /*const */byte* kickerUniqueIdentifier, /*const */byte* kickMessage)
+    {
+        HandleClientMoved(serverConnectionHandlerID, clientID, oldChannelID, newChannelID);
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onClientKickFromServerEvent")]
+    public unsafe static void ts3plugin_onClientKickFromServerEvent(ulong serverConnectionHandlerID, ushort clientID,
+        ulong oldChannelID, ulong newChannelID, Visibility visibility,
+        ushort kickerID, /*const */byte* kickerName, /*const */byte* kickerUniqueIdentifier, /*const */byte* kickMessage)
+    {
+        HandleClientMoved(serverConnectionHandlerID, clientID, oldChannelID, newChannelID);
+    }
+
     static void HandleClientMoved(ulong serverConnectionHandlerID, ushort clientID, ulong oldChannelID, ulong newChannelID)
     {
+        if (serverConnectionHandlerID != connHandlerId)
+            return;
+
         if (clientID == localClientId)
         {
-            // TODO: Check serverConnectionHandlerID against current
-
             currentChannelId = newChannelID;
             Console.WriteLine($"TS-SE Plugin - Current channel changed. NewChannelID: {newChannelID}");
 
@@ -943,19 +1009,25 @@ public static class Plugin
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onTalkStatusChangeEvent")]
     public static void ts3plugin_onTalkStatusChangeEvent(ulong serverConnectionHandlerID, int status, int isReceivedWhisper, ushort clientID)
     {
-        if ((TalkStatus)status == TalkStatus.STATUS_TALKING)
-            SetClientIsWhispering(clientID, isReceivedWhisper != 0);
-        else
-            SetClientIsWhispering(clientID, false);
+        if (serverConnectionHandlerID != connHandlerId)
+            return;
+
+        if (isReceivedWhisper == 1) // Event caused by whisper
+            SetClientIsWhispering(clientID, (TalkStatus)status == TalkStatus.STATUS_TALKING);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onCustom3dRolloffCalculationClientEvent")]
     public unsafe static void ts3plugin_onCustom3dRolloffCalculationClientEvent(ulong serverConnectionHandlerID, ushort clientID, float distance, float* volume)
     {
+        if (serverConnectionHandlerID != connHandlerId)
+            return;
+
         var client = GetClientByClientId(clientID);
 
         if (client == null)
             return;
+
+        // TODO: Scale volume down when client is facing away
 
         float dist = Distance(default, client.Position);
         *volume = Math.Clamp(1f / MathF.Pow((dist * distanceScale) + 0.6f, distanceFalloff), 0, 1);
@@ -967,6 +1039,9 @@ public static class Plugin
     public unsafe static void ts3plugin_onPluginCommandEvent(ulong serverConnectionHandlerID, byte* pluginName, byte* pluginCommand,
         ushort invokerClientID, byte* invokerName, byte* invokerUniqueIdentity)
     {
+        if (serverConnectionHandlerID != connHandlerId)
+            return;
+
         // Commands can get sent to yourself
         if (invokerClientID == localClientId)
             return;
@@ -979,8 +1054,6 @@ public static class Plugin
         var cmd = Marshal.PtrToStringUTF8((nint)pluginCommand);
         var invoker = Marshal.PtrToStringUTF8((nint)invokerName);
 
-        Console.WriteLine($"TS-SE Plugin - Received plugin command, PluginName: {pName}, Command: {cmd}, InvokerClientId: {invokerClientID}, InvokerName: {invoker}");
-
         var client = GetClientByClientId(invokerClientID);
 
         if (client == null)
@@ -989,11 +1062,13 @@ public static class Plugin
             return;
         }
 
+        Console.WriteLine($"TS-SE Plugin - Received plugin command, PluginName: {pName}, Command: {cmd}, InvokerClientId: {invokerClientID}, InvokerName: {invoker}");
+
         if (cmd != null && cmd.StartsWith("TSSE,SteamId:"))
         {
             if (ulong.TryParse(cmd.AsSpan("TSSE,SteamId:".Length), out ulong steamId))
             {
-                Console.WriteLine($"TS-SE Plugin - Recieved SteamId for client, ClientId:{invokerClientID}, SteamId:{steamId}");
+                //Console.WriteLine($"TS-SE Plugin - Recieved SteamId for client, ClientId:{invokerClientID}, SteamId:{steamId}");
                 client.SteamID = steamId;
                 return;
             }
@@ -1005,10 +1080,11 @@ public static class Plugin
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onClientDisplayNameChanged")]
     public unsafe static void ts3plugin_onClientDisplayNameChanged(ulong serverConnectionHandlerID, ushort clientID, /*const */byte* displayName, /*const */byte* uniqueClientIdentifier)
     {
-        if (clientID == localClientId)
+        if (serverConnectionHandlerID != connHandlerId)
             return;
 
-        // TODO: Check serverConnectionHandlerID against current
+        if (clientID == localClientId)
+            return;
 
         var name = Marshal.PtrToStringUTF8((IntPtr)displayName);
         var client = GetClientByClientId(clientID);
@@ -1019,7 +1095,7 @@ public static class Plugin
         }
         else
         {
-            Console.WriteLine($"TS-SE Plugin - Unregisterd client changed display name. ClientID: {clientID}");
+            //Console.WriteLine($"TS-SE Plugin - Unregisterd client changed display name. ClientID: {clientID}");
         }
     }
 

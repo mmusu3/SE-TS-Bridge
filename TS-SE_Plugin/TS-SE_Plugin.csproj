@@ -5,7 +5,7 @@
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <Platforms>x64</Platforms>
-    <Version>1.0.8</Version>
+    <Version>1.1.0</Version>
     <OutputPath>../Bin/TS-SE_Plugin</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <IlcDisableReflection>true</IlcDisableReflection>

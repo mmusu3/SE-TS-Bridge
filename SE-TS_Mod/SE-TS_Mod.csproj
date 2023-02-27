@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>6</LangVersion>
+    <RootNamespace>SE_TS_Mod</RootNamespace>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <BinPath>G:\Program Files (x86)\Steam\steamapps\common\SpaceEngineers\Bin64</BinPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="Sandbox.Common">
+      <HintPath>$(BinPath)\Sandbox.Common.dll</HintPath>
+    </Reference>
+    <Reference Include="Sandbox.Game">
+      <HintPath>$(BinPath)\Sandbox.Game.dll</HintPath>
+    </Reference>
+    <Reference Include="VRage">
+      <HintPath>$(BinPath)\VRage.dll</HintPath>
+    </Reference>
+    <Reference Include="VRage.Math">
+      <HintPath>$(BinPath)\VRage.Math.dll</HintPath>
+    </Reference>
+    <Reference Include="VRage.Game">
+      <HintPath>$(BinPath)\VRage.Game.dll</HintPath>
+    </Reference>
+    <Reference Include="VRage.Library">
+      <HintPath>$(BinPath)\VRage.Library.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+  <Target Name="PostBuild" AfterTargets="PostBuildEvent">
+    <Exec Command="xcopy $(MSBuildProjectDirectory)\Mod.cs &quot;%appdata%\SpaceEngineers\Mods\SE-TS_Mod\Data\Scripts\&quot; /y" />
+  </Target>
+
+</Project>
