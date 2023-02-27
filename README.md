@@ -1,6 +1,6 @@
 # SE-TS-Bridge
 Plugins for Space Engineers and TeamSpeak to enable positional audio features.  
-This project is very early in development. It has only basic functionality and may still have occasional crashing or freezing issues.  
+This project is early in development. It is lacking some functionality and may still have occasional crashing or freezing issues.  
 
 ## Installation
 First download and unzip the `SE-TS_Bridge.zip` file from the latest release here https://github.com/mmusu3/SE-TS-Bridge/releases  
@@ -41,3 +41,7 @@ Default values:
 * `distancefalloff 0.9`
 
 These commands may be restricted in future releases.
+
+#### Space Engineers Server Mod
+These plugins can also work togther with a server mod for SE. The mod makes Teamspeak whispers only audible by players of the same faction from players with an active antenna connection.
+The server mod is linked here: https://steamcommunity.com/sharedfiles/filedetails/?id=2935694294
