@@ -295,11 +295,18 @@ public unsafe struct TS3Functions
     public uint setServerVariableAsDouble(ulong serverConnectionHandlerID, nint flag, double value) => ((delegate*<ulong, nint, double, uint>)pointers[223])(serverConnectionHandlerID, flag, value);
     public uint setServerVariableAsString(ulong serverConnectionHandlerID, nint flag, /*const */byte* value) => ((delegate*<ulong, nint, /*const */byte*, uint>)pointers[224])(serverConnectionHandlerID, flag, value);
     public uint flushServerUpdates(ulong serverConnectionHandlerID, /*const */byte* returnCode) => ((delegate*<ulong, /*const */byte*, uint>)pointers[225])(serverConnectionHandlerID, returnCode);
+
+    /* Server/Channel group helper functions */
+    public uint getServerGroupIDByName(ulong serverConnectionHandlerID, /*const */byte* groupName, uint* result) => ((delegate*<ulong, byte*, uint*, uint>)pointers[226])(serverConnectionHandlerID, groupName, result);
+    public uint getServerGroupNameByID(ulong scHandlerID, uint groupID, byte* result, nint max_len) => ((delegate*<ulong, uint, byte*, nint, uint>)pointers[227])(scHandlerID, groupID, result, max_len);
+    public uint getChannelGroupIDByName(ulong serverConnectionHandlerID, /*const */byte* groupName, uint* result) => ((delegate*<ulong, byte*, uint*, uint>)pointers[228])(serverConnectionHandlerID, groupName, result);
+    public uint getChannelGroupNameByID(ulong scHandlerID, uint groupID, byte* result, nint max_len) => ((delegate*<ulong, byte*, nint, uint>)pointers[229])(scHandlerID, result, max_len);
 #pragma warning restore IDE1006 // Naming Styles
 }
 
 #region public_definitions.h
 
+/// <summary>Describes a client position in 3 dimensional space, used for 3D Sound.</summary>
 public struct TS3_VECTOR
 {
     /// <summary>X co-ordinate in 3D space.</summary>
@@ -312,79 +319,277 @@ public struct TS3_VECTOR
     public float z;
 }
 
+public enum Visibility
+{
+    /// <summary>Client joined from an unsubscribed channel, or joined the server.</summary>
+    ENTER_VISIBILITY = 0,
+    /// <summary>Client switched from one subscribed channel to a different subscribed channel.</summary>
+    RETAIN_VISIBILITY,
+    /// <summary>Client switches to an unsubscribed channel, or disconnected from server.</summary>
+    LEAVE_VISIBILITY
+}
+
+enum ConnectStatus
+{
+    /// <summary>There is no activity to the server, this is the default value.</summary>
+    STATUS_DISCONNECTED = 0,
+
+    /// <summary>We are trying to connect, we haven't got a clientID yet, we haven't been accepted by the server.</summary>
+    STATUS_CONNECTING,
+
+    /// <summary>
+    /// The server has accepted us, we can talk and hear and we got a clientID, but we
+    /// don't have the channels and clients yet, we can get server infos (welcome msg etc.)
+    /// </summary>
+    STATUS_CONNECTED,
+
+    /// <summary>We are CONNECTED and we are visible.</summary>
+    STATUS_CONNECTION_ESTABLISHING,
+
+    /// <summary>We are CONNECTED and we have the client and channels available.</summary>
+    STATUS_CONNECTION_ESTABLISHED,
+}
+
 enum TalkStatus
 {
+    /// <summary>client is not talking</summary>
     STATUS_NOT_TALKING = 0,
+    /// <summary>client is talking</summary>
     STATUS_TALKING = 1,
+    /// <summary>client is talking while the microphone is muted (only valid for own client)</summary>
     STATUS_TALKING_WHILE_DISABLED = 2,
+}
+
+enum ChannelProperties
+{
+    /// <summary>String.  Read/Write. Name of the channel. Always available.</summary>
+    CHANNEL_NAME = 0,
+    /// <summary>String.  Read/Write. Short single line text describing what the channel is about. Always available.</summary>
+    CHANNEL_TOPIC,
+    /// <summary>
+    /// String.  Read/Write. Arbitrary text (up to 8k bytes) with information about the channel.
+    /// Must be requested (<see cref="TS3Functions.requestChannelDescription"/>)
+    /// </summary>
+    CHANNEL_DESCRIPTION,
+    /// <summary>
+    /// String.  Read/Write. Password of the channel. Read access is limited to the server. Clients
+    /// will only ever see the last password they attempted to use when joining the channel. Always available.
+    /// </summary>
+    CHANNEL_PASSWORD,
+    /// <summary>
+    /// Integer. Read/Write. The codec this channel is using. One of the
+    /// values from the <see cref="CodecType"/> enum. Always available.
+    /// </summary>
+    CHANNEL_CODEC,
+    /// <summary>
+    /// Integer. Read/Write. The quality setting of the channel. Valid values are 0 to 10 inclusive.
+    /// Higher value means better voice quality but also more bandwidth usage. Always available.
+    /// </summary>
+    CHANNEL_CODEC_QUALITY,
+    /// <summary>
+    /// Integer. Read/Write. The number of clients that can be in the channel simultaneously.
+    /// Always available.
+    /// </summary>
+    CHANNEL_MAXCLIENTS,
+    /// <summary>
+    /// Integer. Read/Write. The total number of clients that can be in this channel and all
+    /// sub channels of this channel. Always available.
+    /// </summary>
+    CHANNEL_MAXFAMILYCLIENTS,
+    /// <summary>
+    /// UInt64.  Read/Write. The ID of the channel below which this channel should be displayed. If 0
+    /// the channel is sorted at the top of the current level. Always available.
+    /// </summary>
+    CHANNEL_ORDER,
+    /// <summary>
+    /// Integer. Read/Write. Boolean (1/0) indicating whether the channel remains when empty.
+    /// Permanent channels are stored to the database and available after server restart. SDK
+    /// users will need to take care of restoring channel at server start on their own.
+    /// Mutually exclusive with \ref CHANNEL_FLAG_SEMI_PERMANENT. Always available.
+    /// </summary>
+    CHANNEL_FLAG_PERMANENT,
+    /// <summary>
+    /// Integer. Read/Write. Boolean (1/0) indicating whether the channel remains when
+    /// empty. Semi permanent channels are not stored to disk and gone after server
+    /// restart but remain while empty. Mutually exclusive with \ref
+    /// CHANNEL_FLAG_PERMANENT. Always available.
+    /// </summary>
+    CHANNEL_FLAG_SEMI_PERMANENT,
+    /// <summary>
+    /// Integer. Read/Write. Boolean (1/0). The default channel is the channel that all clients
+    /// are located in when they join the server, unless the client explicitly specified a
+    /// different channel when connecting and is allowed to join their preferred channel. Only
+    /// one channel on the server can have this flag set. The default channel must have \ref
+    /// CHANNEL_FLAG_PERMANENT set. Always available.
+    /// </summary>
+    CHANNEL_FLAG_DEFAULT,
+    /// <summary>
+    /// Integer. Read/Write. Boolean (1/0) indicating whether this channel is password protected.
+    /// When removing or setting \ref CHANNEL_PASSWORD you also need to adjust this flag.
+    /// </summary>
+    CHANNEL_FLAG_PASSWORD,
+    /// <summary>
+    /// (deprecated) Integer. Read/Write. Allows to increase packet size, reducing
+    /// bandwith at the cost of higher latency of voice transmission. Valid values are
+    /// 1-10 inclusive. 1 is the default and offers the lowest latency. Always available.
+    /// </summary>
+    CHANNEL_CODEC_LATENCY_FACTOR,
+    /// <summary>
+    /// Integer. Read/Write. Boolean (1/0). If 0 voice data is encrypted, if 1 the voice
+    /// data is not encrypted. Only used if the server \ref
+    /// VIRTUALSERVER_CODEC_ENCRYPTION_MODE is set to \ref CODEC_ENCRYPTION_PER_CHANNEL.
+    /// Always available.
+    /// </summary>
+    CHANNEL_CODEC_IS_UNENCRYPTED,
+    /// <summary>
+    /// String.  Read/Write. SDK Only, not used by TeamSpeak. This channels security hash. When
+    /// a client joins their \ref CLIENT_SECURITY_HASH is compared to this value, to allow or
+    /// deny the client access to the channel. Used to enforce clients joining the server with
+    /// specific identity and \ref CLIENT_META_DATA. See SDK Documentation about this feature
+    /// for further details. Always available.
+    /// </summary>
+    CHANNEL_SECURITY_SALT,
+    /// <summary>
+    /// UInt64.  Read/Write. Number of seconds deletion of temporary channels is delayed after
+    /// the last client leaves the channel. Channel is only deleted if empty when the delete
+    /// delay expired. Always available.
+    /// </summary>
+    CHANNEL_DELETE_DELAY,
+    /// <summary>
+    /// String.  Read only.  An identifier that uniquely identifies a channel. Available in
+    /// Server >= 3.10.0
+    /// </summary>
+    CHANNEL_UNIQUE_IDENTIFIER,
+    CHANNEL_ENDMARKER,
 }
 
 enum ClientProperties
 {
-    /// <summary>Automatically up-to-date for any client "in view", can be used to identify this particular client installation.</summary>
+    /// <summary>
+    /// String. Read only. Public Identity, can be used to identify a client installation.
+    /// Remains identical as long as the client keeps using the same identity.
+    /// Available for visible clients.
+    /// </summary>
     CLIENT_UNIQUE_IDENTIFIER = 0,
 
-    /// <summary>Automatically up-to-date for any client "in view".</summary>
+    /// <summary>String. Read/Write. Display name of the client. Available for visible clients.</summary>
     CLIENT_NICKNAME,
 
-    /// <summary>For other clients than ourself, this needs to be requested (=> requestClientVariables).</summary>
+    /// <summary>
+    /// String. Read only. Version String of the client used. For clients other than
+    /// ourself this needs to be requested (<see cref="TS3Functions.requestClientVariables"/>).
+    /// </summary>
     CLIENT_VERSION,
 
-    /// <summary>For other clients than ourself, this needs to be requested (=> requestClientVariables).</summary>
+    /// <summary>
+    /// String. Read only. Operating system used by the client.
+    /// For other clients other than ourself this needs to
+    /// be requested (<see cref="TS3Functions.requestClientVariables"/>).
+    /// </summary>
     CLIENT_PLATFORM,
 
-    /// <summary>Automatically up-to-date for any client that can be heard (in room / whisper).</summary>
+    /// <summary>
+    /// Integer. Read only. Whether the client is talking. Available on
+    /// clients that are either whispering to us, or in our channel.
+    /// </summary>
     CLIENT_FLAG_TALKING,
 
-    /// <summary>Automatically up-to-date for any client "in view", this clients microphone mute status.</summary>
+    /// <summary>
+    /// Integer. Read/Write. Microphone mute status. Available for visible
+    /// clients. One of the values from the <see cref="MuteInputStatus"/> enum.
+    /// </summary>
     CLIENT_INPUT_MUTED,
 
-    /// <summary>Automatically up-to-date for any client "in view", this clients headphones/speakers/mic combined mute status.</summary>
+    /// <summary>
+    /// Integer. Read only. Speaker mute status. Speaker mute implies microphone mute.
+    /// Available for visible clients. One of the values from the <see cref="MuteOutputStatus"/> enum.
+    /// </summary>
     CLIENT_OUTPUT_MUTED,
 
-    /// <summary>Automatically up-to-date for any client "in view", this clients headphones/speakers only mute status.</summary>
+    /// <summary>
+    /// Integer. Read only. Speaker mute status. Microphone may be active.
+    /// Available for visible clients. One of the values from the <see cref="MuteOutputStatus"/> enum.
+    /// </summary>
     CLIENT_OUTPUTONLY_MUTED,
 
-    /// <summary>Automatically up-to-date for any client "in view", this clients microphone hardware status (is the capture device opened?).</summary>
+    /// <summary>
+    /// Integer. Read only. Indicates whether a capture device is open.
+    /// Available for visible clients. One of the values from the <see cref="HardwareInputStatus"/> enum.
+    /// </summary>
     CLIENT_INPUT_HARDWARE,
 
-    /// <summary>Automatically up-to-date for any client "in view", this clients headphone/speakers hardware status (is the playback device opened?).</summary>
+    /// <summary>
+    /// Integer. Read only. Indicates whether a playback device is open.
+    /// Available for visible clients. One of the values from the <see cref="HardwareOutputStatus"/> enum.
+    /// </summary>
     CLIENT_OUTPUT_HARDWARE,
 
-    /// <summary>Only usable for ourself, not propagated to the network.</summary>
+    /// <summary>
+    /// Integer. Read/Write. Not available server side. Local microphone mute status.
+    /// Available only for own client. Used to implement Push To Talk.
+    /// One of the values from the <see cref="InputDeactivationStatus"/> enum.
+    /// </summary>
     CLIENT_INPUT_DEACTIVATED,
 
-    /// <summary>Internal use.</summary>
+    /// <summary>UInt64. Read only. Seconds since last activity. Available only for own client.</summary>
     CLIENT_IDLE_TIME,
 
-    /// <summary>Only usable for ourself, the default channel we used to connect on our last connection attempt.</summary>
+    /// <summary>
+    /// String. Read only. User specified channel they joined when connecting to the server.
+    /// Available only for own client.
+    /// </summary>
     CLIENT_DEFAULT_CHANNEL,
 
-    /// <summary>Internal use.</summary>
+    /// <summary>
+    /// String. Read only. User specified channel password for the channel they attempted
+    /// to join when connecting to the server. Available only for own client.
+    /// </summary>
     CLIENT_DEFAULT_CHANNEL_PASSWORD,
 
-    /// <summary>Internal use.</summary>
+    /// <summary>
+    /// String. Read only. User specified server password.
+    /// Available only for own client.
+    /// </summary>
     CLIENT_SERVER_PASSWORD,
 
-    /// <summary>Automatically up-to-date for any client "in view", not used by TeamSpeak, free storage for sdk users.</summary>
+    /// <summary>
+    /// String. Read/Write. Can be used to store up to 4096 bytes of information
+    /// on clients. Not used by TeamSpeak. Available for visible clients.
+    /// </summary>
     CLIENT_META_DATA,
 
-    /// <summary>Only make sense on the client side locally, "1" if this client is currently muted by us, "0" if he is not.</summary>
+    /// <summary>
+    /// Integer. Read only. Not available server side. Indicates whether we
+    /// have muted the client using <see cref="TS3Functions.requestMuteClients"/>.
+    /// Available for visible clients other than ourselves.
+    /// </summary>
     CLIENT_IS_MUTED,
 
-    /// <summary>Automatically up-to-date for any client "in view".</summary>
+    /// <summary>
+    /// Integer. Read only. Indicates whether the client is recording
+    /// incoming audio. Available for visible clients.
+    /// </summary>
     CLIENT_IS_RECORDING,
 
-    /// <summary>Internal use.</summary>
+    /// <summary>
+    /// Integer. Read only. Volume adjustment for this client as
+    /// set by <see cref="TS3Functions.setClientVolumeModifier"/>.
+    /// Available for visible clients.
+    /// </summary>
     CLIENT_VOLUME_MODIFICATOR,
 
-    /// <summary>Sign.</summary>
+    /// <summary>String. Read only. TeamSpeak internal signature.</summary>
     CLIENT_VERSION_SIGN,
 
-    /// <summary>SDK use, not used by teamspeak. Hash is provided by an outside source. A channel will use the security salt + other client data to calculate a hash, which must be the same as the one provided here.</summary>
+    /// <summary>
+    /// String. Read/Write. This clients security hash. Not used by TeamSpeak, SDK only.
+    /// Hash is provided by an outside source. A channel will use the security salt + other
+    /// client data to calculate a hash, which must be the same as the one provided here.
+    /// See SDK documentation about Client / Channel Security Hashes for more details.
+    /// </summary>
     CLIENT_SECURITY_HASH,
 
-    /// <summary>Internal use.</summary>
+    /// <summary>String. Read only. SDK only. List of available ciphers this client can use.</summary>
     CLIENT_ENCRYPTION_CIPHERS,
 
     CLIENT_ENDMARKER,
@@ -418,12 +623,19 @@ enum PluginTargetMode
 [Flags]
 public enum LogTypes
 {
+    /// <summary>Logging is disabled</summary>
     LogType_NONE = 0x0000,
+    /// <summary>Log to regular file</summary>
     LogType_FILE = 0x0001,
+    /// <summary>Log to standard output / error</summary>
     LogType_CONSOLE = 0x0002,
+    /// <summary>User defined logging. Will call the 'ServerLibFunctions.onUserLoggingMessageEvent' callback for every message to be logged</summary>
     LogType_USERLOGGING = 0x0004,
+    /// <summary>Not used</summary>
     LogType_NO_NETLOGGING = 0x0008,
+    /// <summary>Log to database (deprecated, server only, no effect in SDK)</summary>
     LogType_DATABASE = 0x0010,
+    /// <summary>Log to syslog (only available on Linux)</summary>
     LogType_SYSLOG = 0x0020,
 }
 
@@ -540,204 +752,328 @@ public enum PluginConnectTab
 
 #endregion
 
-#region clientlib_publicdefinitions.h
-
-public enum Visibility
-{
-    ENTER_VISIBILITY = 0,
-    RETAIN_VISIBILITY,
-    LEAVE_VISIBILITY
-}
-
-enum ConnectStatus
-{
-    /// <summary>There is no activity to the server, this is the default value.</summary>
-    STATUS_DISCONNECTED = 0,
-
-    /// <summary>We are trying to connect, we haven't got a clientID yet, we haven't been accepted by the server.</summary>
-    STATUS_CONNECTING,
-
-    /// <summary>The server has accepted us, we can talk and hear and we got a clientID, but we don't have the channels and clients yet, we can get server infos (welcome msg etc.)</summary>
-    STATUS_CONNECTED,
-
-    /// <summary>We are CONNECTED and we are visible.</summary>
-    STATUS_CONNECTION_ESTABLISHING,
-
-    /// <summary>We are CONNECTED and we have the client and channels available.</summary>
-    STATUS_CONNECTION_ESTABLISHED,
-}
-
-#endregion
-
 #region public_errors.h
 
 enum Ts3ErrorType
 {
     //general
-    ERROR_ok = 0x0000,
-    ERROR_undefined = 0x0001,
-    ERROR_not_implemented = 0x0002,
-    ERROR_ok_no_update = 0x0003,
-    ERROR_dont_notify = 0x0004,
-    ERROR_lib_time_limit_reached = 0x0005,
-    ERROR_out_of_memory = 0x0006,
-    ERROR_canceled = 0x0007,
+    ///<summary>Indicates success.</summary>
+    ERROR_ok                        = 0x0000,
+    ERROR_undefined                 = 0x0001,
+    ///<summary>The attempted operation is not available in this context</summary>
+    ERROR_not_implemented           = 0x0002,
+    ///<summary>
+    ///Indicates success, but no change occurred. Returned for
+    ///example upon flushing (e.g. using <see cref="TS3Functions.flushChannelUpdates"/>)
+    ///when all indicated changes already matched the current state.
+    ///</summary>
+    ERROR_ok_no_update              = 0x0003,
+    ERROR_dont_notify               = 0x0004,
+    ERROR_lib_time_limit_reached    = 0x0005,
+    ///<summary>Not enough system memory to perform operation</summary>
+    ERROR_out_of_memory             = 0x0006,
+    ERROR_canceled                  = 0x0007,
 
     //dunno
-    ERROR_command_not_found = 0x0100,
-    ERROR_unable_to_bind_network_port = 0x0101,
-    ERROR_no_network_port_available = 0x0102,
-    ERROR_port_already_in_use = 0x0103,
+    ERROR_command_not_found             = 0x0100,
+    ///<summary>Unspecified failure to create a listening port</summary>
+    ERROR_unable_to_bind_network_port   = 0x0101,
+    ///<summary>Failure to initialize a listening port for FileTransfer</summary>
+    ERROR_no_network_port_available     = 0x0102,
+    ///<summary>Specified port is already in use by a different application</summary>
+    ERROR_port_already_in_use           = 0x0103,
 
     //client
-    ERROR_client_invalid_id = 0x0200,
-    ERROR_client_nickname_inuse = 0x0201,
-    ERROR_client_protocol_limit_reached = 0x0203,
-    ERROR_client_invalid_type = 0x0204,
-    ERROR_client_already_subscribed = 0x0205,
-    ERROR_client_not_logged_in = 0x0206,
-    ERROR_client_could_not_validate_identity = 0x0207,
-    ERROR_client_version_outdated = 0x020a,
-    ERROR_client_is_flooding = 0x020c,
-    ERROR_client_hacked = 0x020d,
-    ERROR_client_cannot_verify_now = 0x020e,
-    ERROR_client_login_not_permitted = 0x020f,
-    ERROR_client_not_subscribed = 0x0210,
+    ///<summary>Client no longer connected</summary>
+    ERROR_client_invalid_id                     = 0x0200,
+    ///<summary>Client name is already in use. Client names must be unique</summary>
+    ERROR_client_nickname_inuse                 = 0x0201,
+    ///<summary>Too many clients on the server</summary>
+    ERROR_client_protocol_limit_reached         = 0x0203,
+    ///<summary>Function called for normal clients that is only available for query clients or vice versa</summary>
+    ERROR_client_invalid_type                   = 0x0204,
+    ///<summary>Attempting to subscribe to a channel already subscribed to</summary>
+    ERROR_client_already_subscribed             = 0x0205,
+    ERROR_client_not_logged_in                  = 0x0206,
+    ///<summary>Identity not valid or insufficient security level</summary>
+    ERROR_client_could_not_validate_identity    = 0x0207,
+    ERROR_client_invalid_password               = 0x0208,
+    ///<summary>Server requires newer client version as determined by the min_client_version properties</summary>
+    ERROR_client_version_outdated               = 0x020a,
+    ///<summary>Triggered flood protection. Further information is supplied in the extra message if applicable.</summary>
+    ERROR_client_is_flooding                    = 0x020c,
+    ERROR_client_hacked                         = 0x020d,
+    ERROR_client_cannot_verify_now              = 0x020e,
+    ERROR_client_login_not_permitted            = 0x020f,
+    ///<summary>Action is only available on subscribed channels</summary>
+    ERROR_client_not_subscribed                 = 0x0210,
 
     //channel
-    ERROR_channel_invalid_id = 0x0300,
-    ERROR_channel_protocol_limit_reached = 0x0301,
-    ERROR_channel_already_in = 0x0302,
-    ERROR_channel_name_inuse = 0x0303,
-    ERROR_channel_not_empty = 0x0304,
-    ERROR_channel_can_not_delete_default = 0x0305,
-    ERROR_channel_default_require_permanent = 0x0306,
-    ERROR_channel_invalid_flags = 0x0307,
-    ERROR_channel_parent_not_permanent = 0x0308,
-    ERROR_channel_maxclients_reached = 0x0309,
-    ERROR_channel_maxfamily_reached = 0x030a,
-    ERROR_channel_invalid_order = 0x030b,
-    ERROR_channel_no_filetransfer_supported = 0x030c,
-    ERROR_channel_invalid_password = 0x030d,
-    ERROR_channel_invalid_security_hash = 0x030f, //note 0x030e is defined in public_rare_errors;
+    ///<summary>Channel does not exist on the server (any longer)</summary>
+    ERROR_channel_invalid_id                    = 0x0300,
+    ///<summary>Too many channels on the server</summary>
+    ERROR_channel_protocol_limit_reached        = 0x0301,
+    ///<summary>Attempting to move a client or channel to its current channel</summary>
+    ERROR_channel_already_in                    = 0x0302,
+    ///<summary>Channel name is already taken by another channel. Channel names must be unique</summary>
+    ERROR_channel_name_inuse                    = 0x0303,
+    ///<summary>Attempting to delete a channel with clients or sub channels in it</summary>
+    ERROR_channel_not_empty                     = 0x0304,
+    ///<summary>Default channel cannot be deleted. Set a new default channel first (see <see cref="TS3Functions.setChannelVariableAsInt"/> or \ref ts3server_setChannelVariableAsInt )</summary>
+    ERROR_channel_can_not_delete_default        = 0x0305,
+    ///<summary>Attempt to set a non permanent channel as default channel. Set channel to permanent first (see <see cref="TS3Functions.setChannelVariableAsInt"/> or \ref ts3server_setChannelVariableAsInt )</summary>
+    ERROR_channel_default_require_permanent     = 0x0306,
+    ///<summary>Invalid combination of <see cref="ChannelProperties"/>, trying to remove <see cref="ChannelProperties.CHANNEL_FLAG_DEFAULT"/> or set a password on the default channel</summary>
+    ERROR_channel_invalid_flags                 = 0x0307,
+    ///<summary>Attempt to move a permanent channel into a non-permanent one, or set a channel to be permanent that is a sub channel of a non-permanent one</summary>
+    ERROR_channel_parent_not_permanent          = 0x0308,
+    ///<summary>Channel is full as determined by its <see cref="ChannelProperties.CHANNEL_MAXCLIENTS"/> setting</summary>
+    ERROR_channel_maxclients_reached            = 0x0309,
+    ///<summary>Channel tree is full as determined by its <see cref="ChannelProperties.CHANNEL_MAXFAMILYCLIENTS"/> setting</summary>
+    ERROR_channel_maxfamily_reached             = 0x030a,
+    ///<summary>Invalid value for the <see cref="ChannelProperties.CHANNEL_ORDER"/> property. The specified channel must exist on the server and be on the same level.</summary>
+    ERROR_channel_invalid_order                 = 0x030b,
+    ///<summary>Invalid \ref CHANNEL_FILEPATH set for the channel</summary>
+    ERROR_channel_no_filetransfer_supported     = 0x030c,
+    ///<summary>Channel has a password not matching the password supplied in the call</summary>
+    ERROR_channel_invalid_password              = 0x030d,
+    // used in public_rare_errors                 = 0x030e,
+    ERROR_channel_invalid_security_hash         = 0x030f,
 
     //server
+    ///<summary>Chosen virtual server does not exist or is offline</summary>
     ERROR_server_invalid_id = 0x0400,
+    ///<summary>attempting to delete a server that is running. Stop the server before deleting it.</summary>
     ERROR_server_running = 0x0401,
+    ///<summary>Client disconnected because the server is going offline</summary>
     ERROR_server_is_shutting_down = 0x0402,
+    ///<summary>
+    ///Given in the onConnectStatusChange event when the server has
+    ///reached its maximum number of clients as defined by the
+    ///<see cref="VirtualServerProperties.VIRTUALSERVER_MAXCLIENTS"/> property
+    ///</summary>
     ERROR_server_maxclients_reached = 0x0403,
+    ///<summary>
+    ///Specified server password is wrong. Provide the correct
+    ///password in the <see cref="TS3Functions.startConnection"/> /
+    ///<see cref="TS3Functions.startConnectionWithChannelID"/> call.
+    ///</summary>
     ERROR_server_invalid_password = 0x0404,
+    ///<summary>Server is in virtual status. The attempted action is not possible in this state. Start the virtual server first.</summary>
     ERROR_server_is_virtual = 0x0407,
+    ///<summary>Attempting to stop a server that is not online.</summary>
     ERROR_server_is_not_running = 0x0409,
-    ERROR_server_is_booting = 0x040a,
+    ERROR_server_is_booting = 0x040a, // Not used
     ERROR_server_status_invalid = 0x040b,
+    ///<summary>Attempt to connect to an outdated server version. The server needs to be updated.</summary>
     ERROR_server_version_outdated = 0x040d,
+    ///<summary>This server is already running within the instance. Each virtual server may only exist once.</summary>
     ERROR_server_duplicate_running = 0x040e,
 
     //parameter
-    ERROR_parameter_quote = 0x0600,
+    ERROR_parameter_quote = 0x0600, // Not used
+    ///<summary>Attempt to flush changes without previously calling set*VariableAs* since the last flush</summary>
     ERROR_parameter_invalid_count = 0x0601,
+    ///<summary>At least one of the supplied parameters did not meet the criteria for that parameter</summary>
     ERROR_parameter_invalid = 0x0602,
+    ///<summary>Failure to supply all the necessary parameters</summary>
     ERROR_parameter_not_found = 0x0603,
+    ///<summary>Invalid type supplied for a parameter, such as passing a string (ie. "five") that expects a number.</summary>
     ERROR_parameter_convert = 0x0604,
+    ///<summary>Value out of allowed range. Such as strings are too long/short or numeric values outside allowed range</summary>
     ERROR_parameter_invalid_size = 0x0605,
+    ///<summary>Neglecting to specify a required parameter</summary>
     ERROR_parameter_missing = 0x0606,
+    ///<summary>Attempting to deploy a modified snapshot</summary>
     ERROR_parameter_checksum = 0x0607,
 
     //unsorted, need further investigation
+    ///<summary>Failure to create default channel</summary>
     ERROR_vs_critical = 0x0700,
+    ///<summary>Generic error with the connection.</summary>
     ERROR_connection_lost = 0x0701,
+    ///<summary>
+    ///Attempting to call functions with a serverConnectionHandler that is
+    ///not connected. You can use <see cref="TS3Functions.getConnectionStatus"/>
+    ///to check whether the connection handler is connected to a server
+    ///</summary>
     ERROR_not_connected = 0x0702,
+    ///<summary>
+    ///Attempting to query connection information (bandwidth usage, ping, etc) without
+    ///requesting them first using <see cref="TS3Functions.requestConnectionInfo"/>
+    ///</summary>
     ERROR_no_cached_connection_info = 0x0703,
+    ///<summary>
+    ///Requested information is not currently available. You may have to
+    ///call <see cref="TS3Functions.requestClientVariables"/> or <see cref="TS3Functions.requestServerVariables"/>
+    ///</summary>
     ERROR_currently_not_possible = 0x0704,
+    ///<summary>No TeamSpeak server running on the specified IP address and port</summary>
     ERROR_failed_connection_initialisation = 0x0705,
+    ///<summary>Failure to resolve the specified hostname to an IP address</summary>
     ERROR_could_not_resolve_hostname = 0x0706,
+    ///<summary>Attempting to perform actions on a non-existent server connection handler</summary>
     ERROR_invalid_server_connection_handler_id = 0x0707,
-    ERROR_could_not_initialise_input_manager = 0x0708,
+    ERROR_could_not_initialise_input_manager = 0x0708, // Not used
+    ///<summary>Calling client library functions without successfully calling \ref ts3client_initClientLib before</summary>
     ERROR_clientlibrary_not_initialised = 0x0709,
+    ///<summary>Calling server library functions without successfully calling \ref ts3server_initServerLib before</summary>
     ERROR_serverlibrary_not_initialised = 0x070a,
+    ///<summary>Using a whisper list that contain more clients than the servers \ref VIRTUALSERVER_MIN_CLIENTS_IN_CHANNEL_BEFORE_FORCED_SILENCE property</summary>
     ERROR_whisper_too_many_targets = 0x070b,
+    ///<summary>The active whisper list is empty or no clients matched the whisper list (e.g. all channels in the list are empty)</summary>
     ERROR_whisper_no_targets = 0x070c,
+    ///<summary>Invalid or unsupported protocol (e.g. attempting an IPv6 connection on an IPv4 only machine)</summary>
     ERROR_connection_ip_protocol_missing = 0x070d,
-    //reserved                                   = 0x070e,
+    ERROR_handshake_failed = 0x070e,
     ERROR_illegal_server_license = 0x070f,
 
     //file transfer
+    ///<summary>Invalid UTF8 string or not a valid file</summary>
     ERROR_file_invalid_name = 0x0800,
+    ///<summary>Permissions prevent opening the file</summary>
     ERROR_file_invalid_permissions = 0x0801,
+    ///<summary>Target path already exists as a directory</summary>
     ERROR_file_already_exists = 0x0802,
+    ///<summary>Attempt to access or move non existing file</summary>
     ERROR_file_not_found = 0x0803,
+    ///<summary>Generic file input / output error</summary>
     ERROR_file_io_error = 0x0804,
+    ///<summary>
+    ///Attempt to get information about a file transfer after it has already been cleaned up.
+    ///File transfer information is not available indefinitely after the transfer completed
+    ///</summary>
     ERROR_file_invalid_transfer_id = 0x0805,
+    ///<summary>specified path contains invalid characters or does not start with "/"</summary>
     ERROR_file_invalid_path = 0x0806,
-    ERROR_file_no_files_available = 0x0807,
+    ERROR_file_no_files_available = 0x0807, // Not used
+    ///<summary>File overwrite and resume are mutually exclusive. Only one or neither can be 1.</summary>
     ERROR_file_overwrite_excludes_resume = 0x0808,
+    ///<summary>Attempt to write more bytes than claimed file size.</summary>
     ERROR_file_invalid_size = 0x0809,
+    ///<summary>File is currently not available, try again later.</summary>
     ERROR_file_already_in_use = 0x080a,
+    ///<summary>Generic failure in file transfer connection / other party did not conform to file transfer protocol</summary>
     ERROR_file_could_not_open_connection = 0x080b,
+    ///<summary>Operating system reports hard disk is full. May be caused by quota limitations.</summary>
     ERROR_file_no_space_left_on_device = 0x080c,
+    ///<summary>File is too large for the file system of the target device.</summary>
     ERROR_file_exceeds_file_system_maximum_size = 0x080d,
-    ERROR_file_transfer_connection_timeout = 0x080e,
+    ERROR_file_transfer_connection_timeout = 0x080e, // Not used
+    ///<summary>File input / output timeout or connection failure</summary>
     ERROR_file_connection_lost = 0x080f,
-    ERROR_file_exceeds_supplied_size = 0x0810,
+    ERROR_file_exceeds_supplied_size = 0x0810, // Not used
+    ///<summary>Indicates successful completion</summary>
     ERROR_file_transfer_complete = 0x0811,
+    ///<summary>Transfer was cancelled through @ref ts3client_haltTransfer</summary>
     ERROR_file_transfer_canceled = 0x0812,
+    ///<summary>Transfer failed because the server is shutting down, or network connection issues</summary>
     ERROR_file_transfer_interrupted = 0x0813,
+    ///<summary>Transfer terminated due to server bandwidth quota being exceeded. No client can transfer files.</summary>
     ERROR_file_transfer_server_quota_exceeded = 0x0814,
+    ///<summary>Attempt to transfer more data than allowed by this clients' bandwidth quota. Other clients may continue to transfer files.</summary>
     ERROR_file_transfer_client_quota_exceeded = 0x0815,
-    ERROR_file_transfer_reset = 0x0816,
+    ERROR_file_transfer_reset = 0x0816, // Not used
+    ///<summary>Too many file transfers are in progress. Try again later</summary>
     ERROR_file_transfer_limit_reached = 0x0817,
+    ERROR_file_invalid_storage_class = 0x0818, // TODO: Invalid storage class for HTTP FileTransfer (what is a storage class?)
+    ///<summary>Avatar image exceeds maximum width or height accepted by the server.</summary>
+    ERROR_file_invalid_dimension = 0x0819,
+    ///<summary>Transfer failed because the channel quota was exceeded. Uploading to this channel is not possible, but other channels may be fine.</summary>
+    ERROR_file_transfer_channel_quota_exceeded = 0x081a,
 
     //sound
+    ///<summary>Cannot set or query pre processor variables with preprocessing disabled</summary>
     ERROR_sound_preprocessor_disabled = 0x0900,
     ERROR_sound_internal_preprocessor = 0x0901,
     ERROR_sound_internal_encoder = 0x0902,
     ERROR_sound_internal_playback = 0x0903,
+    ///<summary>No audio capture devices are available</summary>
     ERROR_sound_no_capture_device_available = 0x0904,
+    ///<summary>No audio playback devices are available</summary>
     ERROR_sound_no_playback_device_available = 0x0905,
+    ///<summary>Error accessing audio device, or audio device does not support the requested mode</summary>
     ERROR_sound_could_not_open_capture_device = 0x0906,
+    ///<summary>Error accessing audio device, or audio device does not support the requested mode</summary>
     ERROR_sound_could_not_open_playback_device = 0x0907,
+    ///<summary>
+    ///Attempt to open a sound device on a connection handler which already
+    ///has an open device. Close the already open device first using
+    ///<see cref="TS3Functions.closeCaptureDevice"/> or <see cref="TS3Functions.closePlaybackDevice"/>
+    ///</summary>
     ERROR_sound_handler_has_device = 0x0908,
+    ///<summary>Attempt to use a device for capture that does not support capturing audio</summary>
     ERROR_sound_invalid_capture_device = 0x0909,
+    ///<summary>Attempt to use a device for playback that does not support playback of audio</summary>
     ERROR_sound_invalid_playback_device = 0x090a,
+    ///<summary>Attempt to use a non WAV file in <see cref="TS3Functions.playWaveFile"/> or <see cref="TS3Functions.playWaveFileHandle"/></summary>
     ERROR_sound_invalid_wave = 0x090b,
+    ///<summary>Unsupported wave file used in <see cref="TS3Functions.playWaveFile"/> or <see cref="TS3Functions.playWaveFileHandle"/>.</summary>
     ERROR_sound_unsupported_wave = 0x090c,
+    ///<summary>Failure to open the specified sound file</summary>
     ERROR_sound_open_wave = 0x090d,
     ERROR_sound_internal_capture = 0x090e,
+    ///<summary>
+    ///Attempt to unregister a custom device that is being used. Close the device first using
+    ///<see cref="TS3Functions.closeCaptureDevice"/> or <see cref="TS3Functions.closePlaybackDevice"/>
+    ///</summary>
     ERROR_sound_device_in_use = 0x090f,
+    ///<summary>Attempt to register a custom device with a device id that has already been used in a previous call. Device ids must be unique.</summary>
     ERROR_sound_device_already_registerred = 0x0910,
+    ///<summary>
+    ///Attempt to open, close, unregister or use a device which is not known. Custom devices
+    ///must be registered before being used (see <see cref="TS3Functions.registerCustomDevice"/>)
+    ///</summary>
     ERROR_sound_unknown_device = 0x0911,
     ERROR_sound_unsupported_frequency = 0x0912,
+    ///<summary>Invalid device audio channel count, must be > 0</summary>
     ERROR_sound_invalid_channel_count = 0x0913,
+    ///<summary>Failure to read sound samples from an opened wave file. Is this a valid wave file?</summary>
     ERROR_sound_read_wave = 0x0914,
-    ERROR_sound_need_more_data = 0x0915, //for internal purposes only
-    ERROR_sound_device_busy = 0x0916, //for internal purposes only
+    ERROR_sound_need_more_data = 0x0915, // for internal purposes only
+    ERROR_sound_device_busy = 0x0916, // for internal purposes only
+    ///<summary>Indicates there is currently no data for playback, e.g. nobody is speaking right now.</summary>
     ERROR_sound_no_data = 0x0917,
+    ///<summary>Opening a device with an unsupported channel count</summary>
     ERROR_sound_channel_mask_mismatch = 0x0918,
 
-
     //permissions
+    ///<summary>Not enough permissions to perform the requested activity</summary>
     ERROR_permissions_client_insufficient = 0x0a08,
+    ///<summary>Permissions to use sound device not granted by operating system, e.g. Windows denied microphone access.</summary>
     ERROR_permissions = 0x0a0c,
 
     //accounting
+    ///<summary>Attempt to use more virtual servers than allowed by the license</summary>
     ERROR_accounting_virtualserver_limit_reached = 0x0b00,
+    ///<summary>Attempt to set more slots than allowed by the license</summary>
     ERROR_accounting_slot_limit_reached = 0x0b01,
-    ERROR_accounting_license_file_not_found = 0x0b02,
+    ERROR_accounting_license_file_not_found = 0x0b02, // Not used
+    ///<summary>License expired or not valid yet</summary>
     ERROR_accounting_license_date_not_ok = 0x0b03,
+    ///<summary>Failure to communicate with accounting backend</summary>
     ERROR_accounting_unable_to_connect_to_server = 0x0b04,
+    ///<summary>Failure to write update license file</summary>
     ERROR_accounting_unknown_error = 0x0b05,
-    ERROR_accounting_server_error = 0x0b06,
+    ERROR_accounting_server_error = 0x0b06, // Not used
+    ///<summary>More than one process of the server is running</summary>
     ERROR_accounting_instance_limit_reached = 0x0b07,
+    ///<summary>Shared memory access failure.</summary>
     ERROR_accounting_instance_check_error = 0x0b08,
+    ///<summary>License is not a TeamSpeak license</summary>
     ERROR_accounting_license_file_invalid = 0x0b09,
+    ///<summary>A copy of this server is already running in another instance. Each server may only exist once.</summary>
     ERROR_accounting_running_elsewhere = 0x0b0a,
+    ///<summary>A copy of this server is running already in this process. Each server may only exist once.</summary>
     ERROR_accounting_instance_duplicated = 0x0b0b,
+    ///<summary>Attempt to start a server that is already running</summary>
     ERROR_accounting_already_started = 0x0b0c,
     ERROR_accounting_not_started = 0x0b0d,
+    ///<summary>Starting instance / virtual servers too often in too short a time period</summary>
     ERROR_accounting_to_many_starts = 0x0b0e,
 
     //provisioning server
+    /// @cond HAS_PROVISIONING
     ERROR_provisioning_invalid_password = 0x1100,
     ERROR_provisioning_invalid_request = 0x1101,
     ERROR_provisioning_no_slots_available = 0x1102,
@@ -759,6 +1095,7 @@ enum Ts3ErrorType
     ERROR_provisioning_invalid_timeout = 0x1118,
     ERROR_provisioning_ts3server_not_found = 0x1119,
     ERROR_provisioning_no_permission = 0x111A,
+    /// @endcond
 }
 
 #endregion

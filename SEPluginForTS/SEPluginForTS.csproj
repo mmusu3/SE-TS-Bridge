@@ -1,15 +1,15 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net7.0</TargetFramework>
+    <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <Platforms>x64</Platforms>
-    <Version>1.1.1</Version>
+    <Version>1.1.2</Version>
     <OutputPath>../Bin/SEPluginForTS</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
-    <IlcDisableReflection>true</IlcDisableReflection>
     <PublishAot>true</PublishAot>
+    <IlcDisableReflection>true</IlcDisableReflection>
   </PropertyGroup>
 
 </Project>
