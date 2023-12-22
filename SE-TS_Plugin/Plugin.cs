@@ -51,7 +51,7 @@ public class Plugin : IPlugin
     readonly Vector3 mouthOffset = new Vector3(0, 1.6f, -0.1f); // Approximate mouth offset
 
     const int minor = 1;
-    const int patch = 0;
+    const int patch = 1;
     const int CurrentVersion = (0xABCD << 16) | (minor << 8) | patch; // 16 bits of magic value, 8 bits of major, 8 bits of minor
 
     struct PlayerStatesHeader
