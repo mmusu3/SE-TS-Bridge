@@ -122,12 +122,12 @@ public class Plugin : IPlugin
 
     void MySession_OnLoading()
     {
-        MyAPIGateway.Multiplayer.RegisterSecureMessageHandler(mpMessageId, mpMessageHandler);
+        MyAPIGateway.Multiplayer?.RegisterSecureMessageHandler(mpMessageId, mpMessageHandler);
     }
 
     void MySession_OnUnloading()
     {
-        MyAPIGateway.Multiplayer.UnregisterSecureMessageHandler(mpMessageId, mpMessageHandler);
+        MyAPIGateway.Multiplayer?.UnregisterSecureMessageHandler(mpMessageId, mpMessageHandler);
 
         if (!pipeStream.IsConnected)
             return;
