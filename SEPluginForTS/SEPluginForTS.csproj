@@ -6,7 +6,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <Platforms>x64</Platforms>
     <Version>1.1.1</Version>
-    <OutputPath>../Bin/TS-SE_Plugin</OutputPath>
+    <OutputPath>../Bin/SEPluginForTS</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <IlcDisableReflection>true</IlcDisableReflection>
     <PublishAot>true</PublishAot>

@@ -5,7 +5,7 @@
     <LangVersion>latest</LangVersion>
     <RootNamespace>SETSPlugin</RootNamespace>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <OutputPath>../Bin/SE-TS_Plugin</OutputPath>
+    <OutputPath>../Bin/TSPluginForSE</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <Platforms>x64</Platforms>
     <Version>1.1.1</Version>

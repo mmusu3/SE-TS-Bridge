@@ -1,4 +1,4 @@
-﻿namespace TSSEPlugin;
+﻿namespace SEPluginForTS;
 
 using System;
 using System.Runtime.InteropServices;

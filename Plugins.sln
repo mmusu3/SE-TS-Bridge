@@ -3,11 +3,11 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.1.32228.430
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "TS-SE_Plugin", "TS-SE_Plugin\TS-SE_Plugin.csproj", "{AA7045FC-9487-4E17-9225-3A843C6F9E98}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SEPluginForTS", "SEPluginForTS\SEPluginForTS.csproj", "{AA7045FC-9487-4E17-9225-3A843C6F9E98}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SE-TS_Plugin", "SE-TS_Plugin\SE-TS_Plugin.csproj", "{1D3FBAE5-B332-4BAF-B9E3-6EDD3F20900B}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "TSPluginForSE", "TSPluginForSE\TSPluginForSE.csproj", "{1D3FBAE5-B332-4BAF-B9E3-6EDD3F20900B}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SE-TS_Mod", "SE-TS_Mod\SE-TS_Mod.csproj", "{1C6BFD57-7305-4589-8D88-0EEE5110AACB}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SE-TS_Mod", "SE-TS_Mod\SE-TS_Mod.csproj", "{1C6BFD57-7305-4589-8D88-0EEE5110AACB}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

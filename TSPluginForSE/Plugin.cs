@@ -18,7 +18,7 @@ using VRage.Plugins;
 using VRage.Utils;
 using VRageMath;
 
-namespace SETSPlugin;
+namespace TSPluginForSE;
 
 public class Plugin : IPlugin
 {
