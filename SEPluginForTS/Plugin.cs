@@ -15,20 +15,14 @@ public class Plugin
     const int patch = 2;
     const int CurrentVersion = (0xABCD << 16) | (minor << 8) | patch; // 16 bits of magic value, 8 bits of major, 8 bits of minor
 
-    static readonly string PluginName = "SE-TS Bridge";
-    static readonly IntPtr PluginNamePtr = StringToHGlobalUTF8(PluginName);
+    // NOTE: Must be kept in sync with the project settings.
+    static ReadOnlySpan<byte> DLLName => "SEPluginForTS"u8;
 
-    static readonly string PluginVersion = $"1.{minor}.{patch}";
-    static readonly IntPtr PluginVersionPtr = StringToHGlobalUTF8(PluginVersion);
-
-    static readonly string PluginAuthor = "Remaarn";
-    static readonly IntPtr PluginAuthorPtr = StringToHGlobalUTF8(PluginAuthor);
-
-    static readonly string PluginDescription = "This plugin integrates with Space Engineers to enable positional audio.";
-    static readonly IntPtr PluginDescriptionPtr = StringToHGlobalUTF8(PluginDescription);
-
-    static readonly string CommandKeyword = "setsbridge";
-    static readonly IntPtr CommandKeywordPtr = StringToHGlobalUTF8(CommandKeyword);
+    static readonly IntPtr PluginNamePtr = AllocHGlobalUTF8("SE-TS Bridge"u8);
+    static readonly IntPtr PluginVersionPtr = StringToHGlobalUTF8($"1.{minor}.{patch}");
+    static readonly IntPtr PluginAuthorPtr = AllocHGlobalUTF8("Remaarn"u8);
+    static readonly IntPtr PluginDescriptionPtr = AllocHGlobalUTF8("This plugin integrates with Space Engineers to enable positional audio."u8);
+    static readonly IntPtr CommandKeywordPtr = AllocHGlobalUTF8("setsbridge"u8);
 
     static Plugin instance = new();
 
@@ -65,6 +59,18 @@ public class Plugin
     readonly List<Client> clients = new();
 
     readonly MemoryPool<byte> memPool = MemoryPool<byte>.Shared;
+
+    static unsafe IntPtr AllocHGlobalUTF8(ReadOnlySpan<byte> s)
+    {
+        void* mem = NativeMemory.Alloc((uint)s.Length + 1);
+
+        fixed (byte* ptr = s)
+            Unsafe.CopyBlockUnaligned(mem, ptr, (uint)s.Length);
+
+        ((byte*)mem)[s.Length] = 0;
+
+        return (IntPtr)mem;
+    }
 
     static unsafe IntPtr StringToHGlobalUTF8(string? s)
     {
@@ -1059,9 +1065,9 @@ public class Plugin
         if (invokerClientID == instance.localClientId)
             return;
 
-        var pName = Marshal.PtrToStringUTF8((nint)pluginName);
+        var nameUtf8 = MemoryMarshal.CreateReadOnlySpanFromNullTerminated(pluginName);
 
-        if (pName != "TS-SE_Plugin") // Seems to use the dll name
+        if (!nameUtf8.SequenceEqual(DLLName))
             return;
 
         var cmd = Marshal.PtrToStringUTF8((nint)pluginCommand);
@@ -1075,7 +1081,7 @@ public class Plugin
             return;
         }
 
-        Console.WriteLine($"[SE-TS Bridge] - Received plugin command, PluginName: {pName}, Command: {cmd}, InvokerClientId: {invokerClientID}, InvokerName: {invoker}");
+        Console.WriteLine($"[SE-TS Bridge] - Received plugin command, PluginName: {System.Text.Encoding.UTF8.GetString(nameUtf8)}, Command: {cmd}, InvokerClientId: {invokerClientID}, InvokerName: {invoker}");
 
         if (cmd != null && cmd.StartsWith("TSSE,SteamId:"))
         {
