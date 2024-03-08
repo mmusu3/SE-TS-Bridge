@@ -52,6 +52,7 @@ public class Plugin
     List<string> pendingConsoleMessages = new();
     bool messageDelayComplete;
 
+    string? remoteComputerName;
     NamedPipeClientStream? pipeStream;
     CancellationTokenSource cancellationTokenSource = null!;
     Task runningTask = null!;
@@ -123,16 +124,59 @@ public class Plugin
             Set3DSettings(distanceScale, 1);
         }
 
+        LoadSettingsFile();
         CreatePipe();
 
         runningTask = UpdateLoop(cancellationTokenSource.Token);
     }
 
+    void LoadSettingsFile()
+    {
+        remoteComputerName = "."; // Default to local computer
+
+        var appDataPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        var settingsFolderPath = Path.Combine(appDataPath, "TS3Client", "plugins", "SEPluginForTS");
+        var settingsFilePath = Path.Combine(settingsFolderPath, "settings.txt");
+
+        if (!File.Exists(settingsFilePath))
+            return;
+
+        string? settingsText;
+
+        try
+        {
+            settingsText = File.ReadAllText(settingsFilePath);
+        }
+        catch (Exception ex)
+        {
+            settingsText = null;
+            AddOrPrintConsoleMessage($"[SE-TS Bridge] - Failed to read settings file. {ex}");
+        }
+
+        if (settingsText != null)
+        {
+            var parts = settingsText.Split('=', StringSplitOptions.RemoveEmptyEntries);
+
+            if (parts.Length == 2 && parts[0] == "RemotePCName")
+            {
+                remoteComputerName = parts[1];
+                AddOrPrintConsoleMessage($"[SE-TS Bridge] - Assigning '{remoteComputerName}' as remote PC name.");
+            }
+            else
+            {
+                AddOrPrintConsoleMessage("[SE-TS Bridge] - Invalid settings file.");
+            }
+        }
+    }
+
     void CreatePipe()
     {
-        // TODO: Allow remote computer
-        pipeStream = new NamedPipeClientStream(".", "09C842DD-F683-4798-A95F-88B0981265BE", PipeDirection.In, PipeOptions.Asynchronous);
+        remoteComputerName ??= "."; // Default to local computer
+
+        const PipeDirection direction = PipeDirection.In;
+
         cancellationTokenSource = new CancellationTokenSource();
+        pipeStream = new NamedPipeClientStream(remoteComputerName, "09C842DD-F683-4798-A95F-88B0981265BE", direction, PipeOptions.Asynchronous);
     }
 
     void Dispose()
@@ -176,7 +220,10 @@ public class Plugin
             catch (TimeoutException) { }
             catch (IOException ioEx) when ((uint)ioEx.HResult == 0x80070035)
             {
-                AddOrPrintConsoleMessage("[SE-TS Bridge] - Failed to connect pipe.");
+                if (remoteComputerName != ".")
+                    AddOrPrintConsoleMessage($"[SE-TS Bridge] - Failed to connect to remote computer '{remoteComputerName}'");
+                else
+                    AddOrPrintConsoleMessage("[SE-TS Bridge] - Failed to connect pipe.");
 
                 pipeStream!.Dispose();
                 pipeStream = null;

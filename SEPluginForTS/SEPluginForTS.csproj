@@ -9,7 +9,6 @@
     <OutputPath>../Bin/SEPluginForTS</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <PublishAot>true</PublishAot>
-    <IlcDisableReflection>true</IlcDisableReflection>
     <DefineConstants>$(DefineConstants);TS_PLUGIN</DefineConstants>
   </PropertyGroup>
 
