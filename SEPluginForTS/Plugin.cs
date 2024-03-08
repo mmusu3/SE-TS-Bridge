@@ -47,6 +47,7 @@ public class Plugin
     bool isInGameSession;
 
     bool useAntennaConnections = true;
+    bool useLocalMuting = false;
 
     List<string> pendingConsoleMessages = new();
     bool messageDelayComplete;
@@ -63,6 +64,7 @@ public class Plugin
         public PluginVersion PluginVersion;
         public ulong SteamID;
         public Vector3 Position;
+        public bool IsLocallyMuted;
         public bool InGameSession;
         public bool HasConnection;
         public bool IsWhispering;
@@ -294,6 +296,8 @@ public class Plugin
 
                 if (item.ClientID != 0)
                     SetClientPos(item.ClientID, default);
+
+                UpdateLocalMutingForClient(item);
             }
         }
 
@@ -358,8 +362,13 @@ public class Plugin
         bool inSessionDifferent = isInGameSession != header.InSession;
         isInGameSession = header.InSession;
 
-        if (inSessionDifferent && !isInGameSession)
-            ResetAllClientPositions();
+        if (inSessionDifferent)
+        {
+            UpdateLocalMutingForAllClients();
+
+            if (!isInGameSession)
+                ResetAllClientPositions();
+        }
 
         bool steamIdChanged = header.LocalSteamID != localSteamID;
 
@@ -515,6 +524,7 @@ public class Plugin
                     client.Position = default;
 
                     SetClientPos(client.ClientID, default);
+                    UpdateLocalMutingForClient(client);
                 }
             }
         }
@@ -544,6 +554,8 @@ public class Plugin
                 client.InGameSession = true;
                 client.Position = pos;
                 client.HasConnection = hasConnection;
+
+                UpdateLocalMutingForClient(client);
             }
             else
             {
@@ -700,7 +712,11 @@ public class Plugin
                     continue;
 
                 var name = GetClientName(id);
+
+                GetLocalMuteStateForClient(connHandlerId, id, out bool muted);
+
                 var client = AddClient(id, name);
+                client.IsLocallyMuted = muted;
 
                 numAdded++;
             }
@@ -717,6 +733,82 @@ public class Plugin
 
         if (err != Ts3ErrorType.ERROR_ok)
             Console.WriteLine($"[SE-TS Bridge] - Failed to free client list. Error: {err}");
+    }
+
+    [Conditional("DEBUG")]
+    void CheckClientLocalMuting(Client client)
+    {
+        if (GetLocalMuteStateForClient(client.ServerConnectionHandlerID, client.ClientID, out bool actualMuted))
+        {
+            if (client.IsLocallyMuted != actualMuted)
+                Console.WriteLine($"[SE-TS Bridge] - ClientID: {client.ClientID} has mismatched local muting state. Cached:{client.IsLocallyMuted}, Actual:{actualMuted}");
+        }
+    }
+
+    void UpdateLocalMutingForClient(Client client)
+    {
+        if (!useLocalMuting)
+            return;
+
+        CheckClientLocalMuting(client);
+
+        if (isInGameSession != client.InGameSession)
+        {
+            if (!client.IsLocallyMuted)
+            {
+                if (MuteClientLocally(client.ServerConnectionHandlerID, client.ClientID))
+                {
+                    DebugConsole($"[SE-TS Bridge] - UpdateLocalMutingForClient. Name:{client.ClientName}, LocalInSession:{isInGameSession}, client.InSession:{client.InGameSession}, client.IsLocallyMuted was:false now:true");
+                    client.IsLocallyMuted = true;
+                }
+            }
+            else
+            {
+                DebugConsole($"[SE-TS Bridge] - UpdateLocalMutingForClient. Name:{client.ClientName}, LocalInSession:{isInGameSession}, client.InSession:{client.InGameSession}, client.IsLocallyMuted:{client.IsLocallyMuted}");
+            }
+        }
+        else
+        {
+            if (client.IsLocallyMuted)
+            {
+                if (UnmuteClientLocally(client.ServerConnectionHandlerID, client.ClientID))
+                {
+                    DebugConsole($"[SE-TS Bridge] - UpdateLocalMutingForClient. Name:{client.ClientName}, LocalInSession:{isInGameSession}, client.InSession:{client.InGameSession}, client.IsLocallyMuted was:true now:false");
+                    client.IsLocallyMuted = false;
+                }
+            }
+            else
+            {
+                DebugConsole($"[SE-TS Bridge] - UpdateLocalMutingForClient. Name:{client.ClientName}, LocalInSession:{isInGameSession}, client.InSession:{client.InGameSession}, client.IsLocallyMuted:{client.IsLocallyMuted}");
+            }
+        }
+    }
+
+    void UpdateLocalMutingForAllClients()
+    {
+        if (!useLocalMuting)
+            return;
+
+        lock (clients)
+        {
+            foreach (var item in clients)
+                UpdateLocalMutingForClient(item);
+        }
+    }
+
+    void UnmuteAllClientsLocally()
+    {
+        if (!useLocalMuting)
+            return;
+
+        lock (clients)
+        {
+            foreach (var item in clients)
+            {
+                if (item.IsLocallyMuted && UnmuteClientLocally(item.ServerConnectionHandlerID, item.ClientID))
+                    item.IsLocallyMuted = false;
+            }
+        }
     }
 
     void HandlePluginCommandEvent(ReadOnlySpan<byte> pluginName, ReadOnlySpan<byte> cmd, Client invokerClient)
@@ -824,6 +916,8 @@ public class Plugin
 
             ReleaseConsole($"[SE-TS Bridge] - Recieved GameInfo for ClientID: {invokerClient.ClientID}. InGameSession: {invokerClient.InGameSession}");
             DebugConsole($"[SE-TS Bridge] - Recieved GameInfo for ClientID: {invokerClient.ClientID}. SteamID: {steamID}, InGameSession: {invokerClient.InGameSession}");
+
+            UpdateLocalMutingForClient(invokerClient);
         }
     }
 
@@ -951,6 +1045,22 @@ public class Plugin
         }
     }
 
+    unsafe bool GetLocalMuteStateForClient(ulong serverConnectionHandlerID, ushort clientID, out bool muted)
+    {
+        int mutedState;
+        var err = (Ts3ErrorType)functions.getClientVariableAsInt(serverConnectionHandlerID, clientID, (int)ClientProperties.CLIENT_IS_MUTED, &mutedState);
+
+        if (err != Ts3ErrorType.ERROR_ok)
+        {
+            muted = false;
+            Console.WriteLine($"[SE-TS Bridge] - Failed to get client local muting state. ClientID: {clientID}, Error: {err}");
+            return false;
+        }
+
+        muted = mutedState != 0;
+        return true;
+    }
+
     unsafe void SendMessageToClient(ushort clientId, string message)
     {
         IntPtr ptr = Marshal.StringToHGlobalAnsi(message);
@@ -966,6 +1076,36 @@ public class Plugin
         {
             Marshal.FreeHGlobal(ptr);
         }
+    }
+
+    unsafe bool MuteClientLocally(ulong serverConnectionHandlerID, ushort clientID)
+    {
+        ushort* clientArray = stackalloc ushort[2] { clientID, 0 };
+
+        var err = (Ts3ErrorType)functions.requestMuteClients(serverConnectionHandlerID, clientArray, null);
+
+        if (err != Ts3ErrorType.ERROR_ok)
+        {
+            Console.WriteLine($"[SE-TS Bridge] - Failed to mute client locally. ClientID: {clientID}, Error: {err}");
+            return false;
+        }
+
+        return true;
+    }
+
+    unsafe bool UnmuteClientLocally(ulong serverConnectionHandlerID, ushort clientID)
+    {
+        ushort* clientArray = stackalloc ushort[2] { clientID, 0 };
+
+        var err = (Ts3ErrorType)functions.requestUnmuteClients(serverConnectionHandlerID, clientArray, null);
+
+        if (err != Ts3ErrorType.ERROR_ok)
+        {
+            Console.WriteLine($"[SE-TS Bridge] - Failed to unmute client locally. ClientID: {clientID}, Error: {err}");
+            return false;
+        }
+
+        return true;
     }
 
     unsafe void PrintMessageToCurrentTab(string message)
@@ -1060,6 +1200,7 @@ public class Plugin
             if (newChannelID != 0)
             {
                 RefetchTSClients();
+                UpdateLocalMutingForAllClients();
                 SendLocalGameInfoToCurrentChannel();
             }
         }
@@ -1078,6 +1219,7 @@ public class Plugin
                 client = AddClientThreadSafe(clientID, name);
             }
 
+            UpdateLocalMutingForClient(client);
             SendLocalGameInfoToClient(client);
         }
         else if (oldChannelID == currentChannelId)
@@ -1093,6 +1235,9 @@ public class Plugin
             {
                 Console.WriteLine($"[SE-TS Bridge] - Unregisterd client left current channel. ClientID: {clientID}, OldChannelID: {oldChannelID}");
             }
+
+            if (useLocalMuting)
+                UnmuteClientLocally(serverConnectionHandlerID, clientID);
         }
         else
         {
