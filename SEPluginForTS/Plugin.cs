@@ -40,8 +40,10 @@ public class Plugin
     Vector3 listenerForward = new() { X = 0, Y = 0, Z = -1 };
     Vector3 listenerUp = new() { X = 0, Y = 1, Z = 0 };
 
-    float distanceScale = 0.3f;
-    float distanceFalloff = 0.9f;
+    float minDistance = 1.3f;
+    float distanceScale = 0.05f;
+    float distanceFalloff = 2f;
+    float maxDistance = 150f;
 
     ulong localSteamID = 0;
     bool isInGameSession;
@@ -1213,6 +1215,19 @@ public class Plugin
                 }
                 break;
             }
+        case "maxdistance":
+            {
+                if (float.TryParse(cmd.AsSpan(spaceIndex).Trim(), out float value))
+                {
+                    maxDistance = value;
+                    PrintMessageToCurrentTab($"Setting max distance to {value}");
+                }
+                else
+                {
+                    PrintMessageToCurrentTab($"Error, failed to parse value.");
+                }
+                break;
+            }
         case "useantennas":
             {
                 if (bool.TryParse(cmd.AsSpan(spaceIndex).Trim(), out bool value))
@@ -1462,10 +1477,18 @@ public class Plugin
 
         // TODO: Scale volume down when client is facing away
 
+        float minD = instance.minDistance;
+        float scale = instance.distanceScale;
         float dist = Vector3.Distance(default, client.Position);
-        *volume = Math.Clamp(1f / MathF.Pow((dist * instance.distanceScale) + 0.6f, instance.distanceFalloff), 0, 1);
+        float vol = float.Min(1f, 1f / float.Pow(dist * scale + 1 - minD * scale, instance.distanceFalloff));
 
-        //Console.WriteLine($"DistScale: {instance.distanceScale}, DistFalloff: {instance.distanceFalloff}, Dist: {dist}, Vol: {*volume}");
+        float limit = dist / instance.maxDistance;
+        limit = 1 - limit * limit;
+
+        vol *= limit;
+        vol = float.Max(0, vol);
+
+        *volume = vol;
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onPluginCommandEvent")]

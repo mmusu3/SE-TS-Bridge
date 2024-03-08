@@ -34,16 +34,18 @@ When updating either plugin, first close the respective application before re-co
 ##### Commands
 The Teamspeak plugin has a couple of chat based commands to control the audio settings.
 
-* `setsbridge distancescale (x)`
-* `setsbridge distancefalloff (x)`
+* `/setsbridge distancescale (x)`
+* `/setsbridge distancefalloff (x)`
+* `/setsbridge maxdistance (x)`
 
 Where (x) is a number.
 
 Default values:  
-* `distancescale 0.3`
-* `distancefalloff 0.9`
+* `distancescale 0.05`
+* `distancefalloff 2`
+* `maxdistance 150`
 
-These commands may be restricted in future releases.
+These commands may be restricted or removed in future releases.
 
 #### Space Engineers Server Mod
 These plugins can also work togther with a server mod for SE. The mod makes Teamspeak whispers only audible by players of the same faction from players with an active antenna connection.
