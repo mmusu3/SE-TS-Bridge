@@ -8,8 +8,9 @@
     <OutputPath>../Bin/TSPluginForSE</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <Platforms>x64</Platforms>
-    <Version>1.1.2</Version>
+    <Version>1.2.0</Version>
     <Nullable>enable</Nullable>
+    <DefineConstants>$(DefineConstants);SE_PLUGIN</DefineConstants>
   </PropertyGroup>
 
   <PropertyGroup>
@@ -59,5 +60,7 @@
       <Private>false</Private>
     </Reference>
   </ItemGroup>
+
+  <Import Project="..\SharedPluginClasses\SharedPluginClasses.projitems" Label="Shared" />
 
 </Project>

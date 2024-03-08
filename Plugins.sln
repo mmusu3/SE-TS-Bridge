@@ -9,6 +9,8 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "TSPluginForSE", "TSPluginFo
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SE-TS_Mod", "SE-TS_Mod\SE-TS_Mod.csproj", "{1C6BFD57-7305-4589-8D88-0EEE5110AACB}"
 EndProject
+Project("{D954291E-2A0B-460D-934E-DC6B0785DB48}") = "SharedPluginClasses", "SharedPluginClasses\SharedPluginClasses.shproj", "{A3E3E4A3-BFCF-4F6F-98D5-D556E7B0D1F2}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -47,5 +49,10 @@ Global
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {1D5EAA20-E447-4887-9930-91C452E2BE53}
+	EndGlobalSection
+	GlobalSection(SharedMSBuildProjectFiles) = preSolution
+		SharedPluginClasses\SharedPluginClasses.projitems*{1d3fbae5-b332-4baf-b9e3-6edd3f20900b}*SharedItemsImports = 5
+		SharedPluginClasses\SharedPluginClasses.projitems*{a3e3e4a3-bfcf-4f6f-98d5-d556e7b0d1f2}*SharedItemsImports = 13
+		SharedPluginClasses\SharedPluginClasses.projitems*{aa7045fc-9487-4e17-9225-3a843c6f9e98}*SharedItemsImports = 5
 	EndGlobalSection
 EndGlobal

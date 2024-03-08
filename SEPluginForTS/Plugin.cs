@@ -1,25 +1,29 @@
 ﻿using System;
 using System.Buffers;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
 using System.IO.Pipes;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.Unicode;
 using System.Threading;
 using System.Threading.Tasks;
+using SharedPluginClasses;
 
 namespace SEPluginForTS;
 
 public class Plugin
 {
-    const int minor = 1;
-    const int patch = 2;
-    const int CurrentVersion = (0xABCD << 16) | (minor << 8) | patch; // 16 bits of magic value, 8 bits of major, 8 bits of minor
+    static PluginVersion currentVersion = new(2, 0);
 
     // NOTE: Must be kept in sync with the project settings.
     static ReadOnlySpan<byte> DLLName => "SEPluginForTS"u8;
 
     static readonly IntPtr PluginNamePtr = AllocHGlobalUTF8("SE-TS Bridge"u8);
-    static readonly IntPtr PluginVersionPtr = StringToHGlobalUTF8($"1.{minor}.{patch}");
+    static readonly IntPtr PluginVersionPtr = AllocVersionStringUTF8();
     static readonly IntPtr PluginAuthorPtr = AllocHGlobalUTF8("Remaarn"u8);
     static readonly IntPtr PluginDescriptionPtr = AllocHGlobalUTF8("This plugin integrates with Space Engineers to enable positional audio."u8);
     static readonly IntPtr CommandKeywordPtr = AllocHGlobalUTF8("setsbridge"u8);
@@ -33,25 +37,33 @@ public class Plugin
     ushort localClientId;
     ulong currentChannelId;
 
-    TS3_VECTOR listenerForward = new() { x = 0, y = 0, z = -1 };
-    TS3_VECTOR listenerUp = new() { x = 0, y = 1, z = 0 };
+    Vector3 listenerForward = new() { X = 0, Y = 0, Z = -1 };
+    Vector3 listenerUp = new() { X = 0, Y = 1, Z = 0 };
 
     float distanceScale = 0.3f;
     float distanceFalloff = 0.9f;
 
-    ulong localSteamId = 0;
+    ulong localSteamID = 0;
+    bool isInGameSession;
+
     bool useAntennaConnections = true;
 
-    NamedPipeClientStream pipeStream = null!;
+    List<string> pendingConsoleMessages = new();
+    bool messageDelayComplete;
+
+    NamedPipeClientStream? pipeStream;
     CancellationTokenSource cancellationTokenSource = null!;
     Task runningTask = null!;
 
     class Client
     {
-        public ulong SteamID;
+        public ulong ServerConnectionHandlerID;
         public ushort ClientID;
         public string? ClientName;
-        public TS3_VECTOR Position;
+        public PluginVersion PluginVersion;
+        public ulong SteamID;
+        public Vector3 Position;
+        public bool InGameSession;
         public bool HasConnection;
         public bool IsWhispering;
     }
@@ -72,36 +84,45 @@ public class Plugin
         return (IntPtr)mem;
     }
 
-    static unsafe IntPtr StringToHGlobalUTF8(string? s)
+    static unsafe IntPtr AllocVersionStringUTF8()
     {
-        if (s is null)
-            return IntPtr.Zero;
+        Span<byte> buffer = stackalloc byte[16];
+        bool formatSuccess = Utf8.TryWrite(buffer, $"1.{currentVersion.Minor}.{currentVersion.Patch}", out int bytesWritten);
 
-        int nb = System.Text.Encoding.UTF8.GetMaxByteCount(s.Length);
-        void* ptr = NativeMemory.Alloc((uint)nb + 1);
+        if (!formatSuccess)
+            return 0;
 
-        int nbWritten;
-        byte* pbMem = (byte*)ptr;
+        buffer[bytesWritten] = 0;
 
-        fixed (char* firstChar = s)
-            nbWritten = System.Text.Encoding.UTF8.GetBytes(firstChar, s.Length, pbMem, nb);
+        void* ptr = NativeMemory.Alloc((uint)bytesWritten + 1);
 
-        pbMem[nbWritten] = 0;
+        buffer.Slice(0, bytesWritten).CopyTo(new Span<byte>(ptr, 32));
+        ((byte*)ptr)[bytesWritten] = 0;
 
         return (IntPtr)ptr;
     }
 
-    void Init()
+    [Conditional("DEBUG")]
+    static void DebugConsole(string text) => Console.WriteLine(text);
+
+    [Conditional("RELEASE")]
+    static void ReleaseConsole(string text) => Console.WriteLine(text);
+
+    unsafe void Init()
     {
         connHandlerId = functions.getCurrentServerConnectionHandlerID();
 
-        if (connHandlerId != 0 && GetLocalClientAndChannelID())
+        int connectionStatus = 0;
+        var err = (Ts3ErrorType)functions.getConnectionStatus(connHandlerId, &connectionStatus);
+
+        if (err == Ts3ErrorType.ERROR_ok && connectionStatus == 1 && GetLocalClientAndChannelID())
         {
             RefetchTSClients();
             Set3DSettings(distanceScale, 1);
         }
 
         CreatePipe();
+
         runningTask = UpdateLoop(cancellationTokenSource.Token);
     }
 
@@ -124,7 +145,7 @@ public class Plugin
         }
         catch (AggregateException ex) when (ex.InnerException is TaskCanceledException) { }
 
-        pipeStream.Dispose();
+        pipeStream?.Dispose();
 
         lock (clients)
         {
@@ -141,28 +162,82 @@ public class Plugin
         Console.WriteLine("[SE-TS Bridge] - Disposed.");
     }
 
+    async ValueTask ConnectPipe(CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                pipeStream!.Connect(timeout: 1/*ms*/);
+                return;
+            }
+            catch (TimeoutException) { }
+            catch (IOException ioEx) when ((uint)ioEx.HResult == 0x80070035)
+            {
+                AddOrPrintConsoleMessage("[SE-TS Bridge] - Failed to connect pipe.");
+
+                pipeStream!.Dispose();
+                pipeStream = null;
+                return;
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    void AddOrPrintConsoleMessage(string message)
+    {
+        Console.WriteLine(message);
+
+        lock (pendingConsoleMessages)
+        {
+            if (messageDelayComplete)
+                PrintMessageToCurrentTab(message);
+            else
+                pendingConsoleMessages.Add(message);
+        }
+    }
+
+    void PrintPendingConsoleMessages()
+    {
+        lock (pendingConsoleMessages)
+        {
+            foreach (var item in pendingConsoleMessages)
+                PrintMessageToCurrentTab(item);
+
+            pendingConsoleMessages.Clear();
+            messageDelayComplete = true;
+        }
+    }
+
     async Task UpdateLoop(CancellationToken cancellationToken)
     {
-        bool fistRun = true;
+        // Messages don't show if done while TS is starting up.
+        _ = Task.Delay(5000, cancellationToken).ContinueWith(t => PrintPendingConsoleMessages(), cancellationToken);
+
+        waitForPipe:
+        while (pipeStream == null)
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(20), cancellationToken);
+            }
+            catch (AggregateException ex) when (ex.InnerException is TaskCanceledException)
+            {
+                return;
+            }
+        }
 
         connect:
-        await pipeStream.ConnectAsync(cancellationToken).ConfigureAwait(false);
+        await ConnectPipe(cancellationToken).ConfigureAwait(false);
 
         if (cancellationToken.IsCancellationRequested)
             return;
 
-        Console.WriteLine("[SE-TS Bridge] - Established connection to Space Engineers plugin.");
+        if (pipeStream == null)
+            goto waitForPipe;
 
-        if (fistRun)
-        {
-            // Message doesn't show if done while TS is starting up.
-            _ = Task.Delay(5000, cancellationToken).ContinueWith(t => PrintMessageToCurrentTab("[SE-TS Bridge] - Established connection to Space Engineers plugin."), cancellationToken);
-            fistRun = false;
-        }
-        else
-        {
-            PrintMessageToCurrentTab("[SE-TS Bridge] - Established connection to Space Engineers plugin.");
-        }
+        AddOrPrintConsoleMessage("[SE-TS Bridge] - Established connection to Space Engineers plugin.");
 
         while (pipeStream.IsConnected && !cancellationToken.IsCancellationRequested)
         {
@@ -180,6 +255,11 @@ public class Plugin
                     break;
                 case UpdateResult.Closed:
                     Console.WriteLine($"[SE-TS Bridge] - Connection was closed. {result.Error}");
+                    break;
+                case UpdateResult.WrongVersion:
+                    var msg = $"[SE-TS Bridge] - Plugin communication failed. {result.Error}";
+                    Console.WriteLine(msg);
+                    PrintMessageToCurrentTab(msg);
                     break;
                 case UpdateResult.Corrupt:
                     Console.WriteLine($"[SE-TS Bridge] - Update failed with result {result.Result}. {result.Error}");
@@ -204,12 +284,7 @@ public class Plugin
             }
         }
 
-        if (cancellationToken.IsCancellationRequested)
-            return;
-
-        await pipeStream.DisposeAsync().ConfigureAwait(false);
-
-        PrintMessageToCurrentTab("[SE-TS Bridge] - Closed connection to Space Engineers.");
+        isInGameSession = false;
 
         lock (clients)
         {
@@ -222,49 +297,34 @@ public class Plugin
             }
         }
 
+        SendLocalGameInfoToCurrentChannel();
+
+        if (cancellationToken.IsCancellationRequested)
+            return;
+
+        await pipeStream.DisposeAsync().ConfigureAwait(false);
+
+        PrintMessageToCurrentTab("[SE-TS Bridge] - Closed connection to Space Engineers.");
+
         CreatePipe();
 
         goto connect;
     }
-
-#pragma warning disable CS0649 // Field is never assigned to, and will always have its default value
-    struct PlayerStatesHeader
-    {
-        public int Version;
-        public ulong LocalSteamId;
-        public TS3_VECTOR Forward;
-        public TS3_VECTOR Up;
-        public int PlayerCount;
-        public int RemovedPlayerCount;
-        public int NewPlayerCount;
-        public int NewPlayerByteLength;
-
-        public unsafe static readonly int Size = sizeof(PlayerStatesHeader);
-    }
-
-    struct ClientState
-    {
-        public ulong SteamID;
-        public TS3_VECTOR Position;
-        public bool HasConnection;
-
-        public unsafe static readonly int Size = sizeof(ClientState);
-    }
-#pragma warning restore CS0649
 
     enum UpdateResult
     {
         OK,
         Canceled,
         Closed,
+        WrongVersion,
         Corrupt
     }
 
     async ValueTask<(UpdateResult Result, string? Error)> Update(CancellationToken cancellationToken)
     {
-        using var headerBuffer = memPool.Rent(PlayerStatesHeader.Size);
+        using var headerBuffer = memPool.Rent(GameUpdatePacket.Size);
         var headerMemory = headerBuffer.Memory;
-        int bytes = await pipeStream.ReadAsync(headerMemory.Slice(0, PlayerStatesHeader.Size), cancellationToken).ConfigureAwait(false);
+        int bytes = await pipeStream!.ReadAsync(headerMemory.Slice(0, GameUpdatePacket.Size), cancellationToken).ConfigureAwait(false);
 
         if (cancellationToken.IsCancellationRequested)
             return (UpdateResult.Canceled, null);
@@ -272,34 +332,58 @@ public class Plugin
         if (bytes == 0)
             return (UpdateResult.Closed, "Pipe returned zero bytes.");
 
-        if (bytes != PlayerStatesHeader.Size)
-            return (UpdateResult.Corrupt, $"Expected {PlayerStatesHeader.Size} bytes, got {bytes}");
+        if (bytes < GameUpdatePacketHeader.Size)
+            return (UpdateResult.Corrupt, $"Expected at least {GameUpdatePacketHeader.Size} bytes, got {bytes}");
 
-        var header = MemoryMarshal.Read<PlayerStatesHeader>(headerMemory.Span);
+        GameUpdatePacket gameUpdate = default;
 
-        if (header.Version != CurrentVersion)
-            return (UpdateResult.Corrupt, "Invalid data");
+        if (bytes != GameUpdatePacket.Size)
+            gameUpdate.Header = MemoryMarshal.Read<GameUpdatePacketHeader>(headerMemory.Span);
+        else
+            gameUpdate = MemoryMarshal.Read<GameUpdatePacket>(headerMemory.Span);
 
-        bool steamIdChanged = header.LocalSteamId != localSteamId;
+        var header = gameUpdate.Header;
 
-        localSteamId = header.LocalSteamId;
+        if (header.Version != currentVersion.Packed)
+        {
+            var headerVersion = new PluginVersion(header.Version);
+            var (m, p) = headerVersion.GetVersionNumbers();
 
-        if (steamIdChanged)
-            SendLocalSteamIdToCurrentChannel();
+            if (headerVersion.IsValid)
+                return (UpdateResult.WrongVersion, $"Mismatched TS and SE plugin versions. Expected:{currentVersion.Minor}.{currentVersion.Patch} but got {m}.{p} from SE.");
+            else
+                return (UpdateResult.Corrupt, "Invalid header version data.");
+        }
 
-        listenerForward = header.Forward;
-        listenerUp = header.Up;
+        bool inSessionDifferent = isInGameSession != header.InSession;
+        isInGameSession = header.InSession;
+
+        if (inSessionDifferent && !isInGameSession)
+            ResetAllClientPositions();
+
+        bool steamIdChanged = header.LocalSteamID != localSteamID;
+
+        localSteamID = header.LocalSteamID;
+
+        if (inSessionDifferent || steamIdChanged)
+            SendLocalGameInfoToCurrentChannel();
+
+        if (bytes != GameUpdatePacket.Size)
+            return (UpdateResult.Corrupt, $"Expected {GameUpdatePacket.Size} bytes, got {bytes}");
+
+        listenerForward = gameUpdate.Forward;
+        listenerUp = gameUpdate.Up;
 
         // No idea what the deal is with this coord system. Just ignore it and do the transform on the game side.
         //if (localClientId != 0)
-        //    SetListener(header.Forward, header.Up);
+        //    SetListener(updatePacket.Forward, updatePacket.Up);
 
-        if (header.PlayerCount == 0 && header.RemovedPlayerCount == 0 && header.NewPlayerCount == 0)
+        if (gameUpdate.PlayerCount == 0 && gameUpdate.RemovedPlayerCount == 0 && gameUpdate.NewPlayerCount == 0)
             return (UpdateResult.OK, null);
 
-        int expectedBytes = header.PlayerCount * ClientState.Size
-            + header.RemovedPlayerCount * sizeof(ulong)
-            + header.NewPlayerByteLength;
+        int expectedBytes = gameUpdate.PlayerCount * ClientGameState.Size
+            + gameUpdate.RemovedPlayerCount * sizeof(ulong)
+            + gameUpdate.NewPlayerByteLength;
 
         using var memBuffer = memPool.Rent(expectedBytes);
         var memory = memBuffer.Memory.Slice(0, expectedBytes);
@@ -312,67 +396,83 @@ public class Plugin
         if (bytes != expectedBytes)
             return (UpdateResult.Corrupt, $"Expected {expectedBytes} bytes, got {bytes}");
 
-        if (header.PlayerCount != 0)
+        if (gameUpdate.PlayerCount != 0)
         {
             ProcessClientStates(memory.Span);
-            memory = memory.Slice(header.PlayerCount * ClientState.Size);
+            memory = memory.Slice(gameUpdate.PlayerCount * ClientGameState.Size);
         }
 
-        if (header.RemovedPlayerCount != 0)
+        if (gameUpdate.RemovedPlayerCount != 0)
         {
-            ProcessRemovedPlayers(header.RemovedPlayerCount, memory.Span);
-            memory = memory.Slice(header.RemovedPlayerCount * sizeof(ulong));
+            ProcessRemovedPlayers(gameUpdate.RemovedPlayerCount, memory.Span);
+            memory = memory.Slice(gameUpdate.RemovedPlayerCount * sizeof(ulong));
         }
 
-        if (header.NewPlayerCount != 0)
+        if (gameUpdate.NewPlayerCount != 0)
         {
-            ProcessNewPlayers(header.NewPlayerCount, memory.Span);
-            memory = memory.Slice(header.NewPlayerByteLength);
+            ProcessNewPlayers(gameUpdate.NewPlayerCount, memory.Span);
+            memory = memory.Slice(gameUpdate.NewPlayerByteLength);
 
             if (memory.Length != 0)
                 return (UpdateResult.Corrupt, "Not all bytes were processed.");
         }
         else
         {
-            if (header.NewPlayerByteLength != 0)
-                return (UpdateResult.Corrupt, $"NewPlayerCount was 0 but NewPlayerByteLength was {header.NewPlayerByteLength}");
+            if (gameUpdate.NewPlayerByteLength != 0)
+                return (UpdateResult.Corrupt, $"NewPlayerCount was 0 but NewPlayerByteLength was {gameUpdate.NewPlayerByteLength}");
         }
 
         return (UpdateResult.OK, null);
     }
 
-    unsafe void SendLocalSteamIdToCurrentChannel()
+    void SendLocalGameInfoToCurrentChannel()
     {
-        if (localSteamId == 0)
-            return;
-
-        //Console.WriteLine("[SE-TS Bridge] - SendLocalSteamIdToCurrentChannel()");
-
-        IntPtr command = StringToHGlobalUTF8("TSSE,SteamId:" + localSteamId);
-
-        functions.sendPluginCommand(connHandlerId, pluginID, (byte*)command, (int)PluginTargetMode.PluginCommandTarget_CURRENT_CHANNEL, null, null);
-
-        NativeMemory.Free((void*)command);
+        //Console.WriteLine("[SE-TS Bridge] - SendLocalGameInfoToCurrentChannel()");
+        SendLocalGameInfoToClientOrChannel(null);
     }
 
-    unsafe void SendLocalSteamIdToClient(Client client)
+    void SendLocalGameInfoToClient(Client client)
     {
-        if (localSteamId == 0)
+        //Console.WriteLine($"[SE-TS Bridge] - SendLocalGameInfoToClient({client.ClientID})");
+        SendLocalGameInfoToClientOrChannel(client);
+    }
+
+    unsafe void SendLocalGameInfoToClientOrChannel(Client? client)
+    {
+        if (localSteamID == 0)
             return;
 
-        //Console.WriteLine($"[SE-TS Bridge] - SendLocalSteamIdToClient({client.ClientID})");
+        byte* commandBuffer = stackalloc byte[64];
+        var cbSpan = new Span<byte>(commandBuffer, 63);
 
-        IntPtr command = StringToHGlobalUTF8("TSSE,SteamId:" + localSteamId);
-        ushort* clientIds = stackalloc ushort[2] { client.ClientID, 0 };
+        bool formatSuccess;
+        int bytesWritten;
 
-        functions.sendPluginCommand(connHandlerId, pluginID, (byte*)command, (int)PluginTargetMode.PluginCommandTarget_CLIENT, clientIds, null);
+        if (client == null || client.PluginVersion > new PluginVersion(1, 2))
+            formatSuccess = Utf8.TryWrite(cbSpan, $"TSSE[{currentVersion.Packed}],GameInfo:{localSteamID}:{(isInGameSession ? 1 : 0)}", out bytesWritten);
+        else
+            formatSuccess = Utf8.TryWrite(cbSpan, $"TSSE,SteamId:{localSteamID}", out bytesWritten);
 
-        NativeMemory.Free((void*)command);
+        commandBuffer[bytesWritten] = 0;
+
+        if (!formatSuccess)
+            Console.WriteLine("[SE-TS Bridge] - Failed to format GameInfo command, insufficient buffer size.");
+
+        if (client != null)
+        {
+            uint clientIdAndTerm = client.ClientID; // Upper 16 bits is zero term
+
+            functions.sendPluginCommand(connHandlerId, pluginID, commandBuffer, PluginTargetMode.PluginCommandTarget_CLIENT, (ushort*)&clientIdAndTerm, null);
+        }
+        else
+        {
+            functions.sendPluginCommand(connHandlerId, pluginID, commandBuffer, PluginTargetMode.PluginCommandTarget_CURRENT_CHANNEL, null, null);
+        }
     }
 
     void ProcessClientStates(ReadOnlySpan<byte> bytes)
     {
-        var states = MemoryMarshal.Cast<byte, ClientState>(bytes);
+        var states = MemoryMarshal.Cast<byte, ClientGameState>(bytes);
 
         //Console.WriteLine($"[SE-TS Bridge] - Processing {states.Length} client states.");
 
@@ -411,7 +511,9 @@ public class Plugin
                 {
                     //Console.WriteLine($"[SE-TS Bridge] - Resetting client position for ID: {client.ClientID}.");
 
+                    client.InGameSession = false;
                     client.Position = default;
+
                     SetClientPos(client.ClientID, default);
                 }
             }
@@ -430,16 +532,23 @@ public class Plugin
 
             bytes = bytes.Slice(nameLength * sizeof(char));
 
-            var pos = Read<TS3_VECTOR>(ref bytes);
+            var pos = Read<Vector3>(ref bytes);
             bool hasConnection = Read<bool>(ref bytes);
             var client = GetClientBySteamId(id);
 
             if (client != null)
             {
-                Console.WriteLine($"[SE-TS Bridge] - Matching client found for Steam ID. SteamId: {id}, SteamName: {name}");
+                DebugConsole($"[SE-TS Bridge] - Matching client found for player SteamID: {id}, SteamName: {name}, ClientID: {client.ClientID}");
+                ReleaseConsole($"[SE-TS Bridge] - Matching client found for player SteamID. SteamName: {name}, ClientID: {client.ClientID}");
 
+                client.InGameSession = true;
                 client.Position = pos;
                 client.HasConnection = hasConnection;
+            }
+            else
+            {
+                ReleaseConsole($"[SE-TS Bridge] - Missing client for player SteamID. SteamName: {name}");
+                DebugConsole($"[SE-TS Bridge] - Missing client for player SteamID: {id}, SteamName: {name}");
             }
         }
     }
@@ -488,6 +597,7 @@ public class Plugin
     Client AddClient(ushort id, string? name)
     {
         var client = new Client {
+            ServerConnectionHandlerID = connHandlerId,
             ClientID = id,
             ClientName = name
         };
@@ -552,6 +662,15 @@ public class Plugin
         SetClientPos(client.ClientID, client.IsWhispering && (client.HasConnection || !useAntennaConnections) ? default : client.Position);
     }
 
+    void ResetAllClientPositions()
+    {
+        lock (clients)
+        {
+            foreach (var item in clients)
+                SetClientPos(item.ClientID, default);
+        }
+    }
+
     unsafe void RefetchTSClients()
     {
         Console.WriteLine("[SE-TS Bridge] - Refetching client list.");
@@ -568,6 +687,7 @@ public class Plugin
         RemoveAllClients();
 
         int numAdded = 0;
+        int numClients;
 
         lock (clients)
         {
@@ -580,15 +700,18 @@ public class Plugin
                     continue;
 
                 var name = GetClientName(id);
-                AddClient(id, name);
+                var client = AddClient(id, name);
+
                 numAdded++;
             }
+
+            numClients = clients.Count;
         }
 
         if (numAdded != 0)
             Console.WriteLine($"[SE-TS Bridge] - Added {numAdded} clients.");
 
-        Console.WriteLine($"[SE-TS Bridge] - There are {clients.Count} total clients.");
+        Console.WriteLine($"[SE-TS Bridge] - There are {numClients} total clients.");
 
         err = (Ts3ErrorType)functions.freeMemory(clientList);
 
@@ -596,19 +719,112 @@ public class Plugin
             Console.WriteLine($"[SE-TS Bridge] - Failed to free client list. Error: {err}");
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    static float DistanceSquared(TS3_VECTOR a, TS3_VECTOR b)
+    void HandlePluginCommandEvent(ReadOnlySpan<byte> pluginName, ReadOnlySpan<byte> cmd, Client invokerClient)
     {
-        float x = b.x - a.x;
-        float y = b.y - a.y;
-        float z = b.z - a.z;
-        return x * x + y * y + z * z;
-    }
+        if (!cmd.StartsWith("TSSE"u8))
+        {
+            var pluginNameStr = Encoding.UTF8.GetString(pluginName);
+            var cmdStr = Encoding.UTF8.GetString(cmd);
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    static float Distance(TS3_VECTOR a, TS3_VECTOR b)
-    {
-        return MathF.Sqrt(DistanceSquared(a, b));
+            Console.WriteLine($"[SE-TS Bridge] - Received unknown plugin command, PluginName: {pluginNameStr}, Command: {cmdStr}, InvokerClientID: {invokerClient.ClientID}, InvokerName: {invokerClient.ClientName}");
+            return;
+        }
+
+        cmd = cmd.Slice("TSSE"u8.Length);
+
+        if (!cmd.StartsWith("["u8)) // Old protocol has no version
+        {
+            if (!cmd.StartsWith(",SteamId:"u8))
+            {
+                Console.WriteLine($"[SE-TS Bridge] - Recieved invalid PCE from ClientID: {invokerClient.ClientID}");
+                return;
+            }
+
+            cmd = cmd.Slice(",SteamId:"u8.Length);
+
+            if (!ulong.TryParse(cmd, out ulong steamID))
+            {
+                Console.WriteLine($"[SE-TS Bridge] - Recieved SteamId PCE with invalid SteamID data from ClientID: {invokerClient.ClientID}.");
+                return;
+            }
+
+            invokerClient.PluginVersion = new PluginVersion(1, 2);
+            invokerClient.SteamID = steamID;
+
+            ReleaseConsole($"[SE-TS Bridge] - Recieved SteamID for ClientID: {invokerClient.ClientID}.");
+            DebugConsole($"[SE-TS Bridge] - Recieved SteamID for ClientID: {invokerClient.ClientID}. SteamID: {steamID}");
+
+            // invokerClient will not have recieved our info since it could not
+            // parse it. Send it again now that its version is known.
+            SendLocalGameInfoToClient(invokerClient);
+        }
+        else
+        {
+            int splitIndex = cmd.IndexOf("],"u8);
+
+            if (splitIndex == -1)
+            {
+                Console.WriteLine($"[SE-TS Bridge] - Recieved invalid PCE from ClientID: {invokerClient.ClientID}");
+                return;
+            }
+
+            if (!uint.TryParse(cmd.Slice(0, splitIndex), out uint version))
+            {
+                Console.WriteLine($"[SE-TS Bridge] - Recieved invalid PCE from ClientID: {invokerClient.ClientID}");
+                return;
+            }
+
+            if (version != currentVersion.Packed)
+            {
+                var cmdVersion = new PluginVersion(version);
+                var (m, p) = cmdVersion.GetVersionNumbers();
+
+                if (cmdVersion.IsValid)
+                {
+                    invokerClient.PluginVersion = new PluginVersion(version);
+                    Console.WriteLine($"[SE-TS Bridge] - Recieved PCE from ClientID: {invokerClient.ClientID} with incorrect version: {m}.{p}");
+                }
+                else
+                {
+                    Console.WriteLine($"[SE-TS Bridge] - Recieved invalid PCE from ClientID: {invokerClient.ClientID}");
+                }
+            }
+
+            cmd = cmd.Slice(splitIndex + "],"u8.Length);
+
+            if (!cmd.StartsWith("GameInfo:"u8))
+            {
+                Console.WriteLine($"[SE-TS Bridge] - Recieved invalid PCE from ClientID: {invokerClient.ClientID}");
+                return;
+            }
+
+            cmd = cmd.Slice("GameInfo:"u8.Length);
+            splitIndex = cmd.IndexOf(":"u8);
+
+            if (splitIndex == -1)
+            {
+                Console.WriteLine($"[SE-TS Bridge] - Recieved invalid GameInfo PCE from ClientID: {invokerClient.ClientID}");
+                return;
+            }
+
+            if (!ulong.TryParse(cmd.Slice(0, splitIndex), out ulong steamID))
+            {
+                Console.WriteLine($"[SE-TS Bridge] - Recieved GameInfo PCE with invalid SteamID data from ClientID: {invokerClient.ClientID}.");
+                return;
+            }
+
+            if (!int.TryParse(cmd.Slice(splitIndex + ":"u8.Length), out int inGameSession))
+            {
+                Console.WriteLine($"[SE-TS Bridge] - Recieved GameInfo PCE with invalid InGameSession data from ClientID: {invokerClient.ClientID}.");
+                return;
+            }
+
+            invokerClient.SteamID = steamID;
+            invokerClient.InGameSession = inGameSession != 0;
+
+            ReleaseConsole($"[SE-TS Bridge] - Recieved GameInfo for ClientID: {invokerClient.ClientID}. InGameSession: {invokerClient.InGameSession}");
+            DebugConsole($"[SE-TS Bridge] - Recieved GameInfo for ClientID: {invokerClient.ClientID}. SteamID: {steamID}, InGameSession: {invokerClient.InGameSession}");
+        }
     }
 
     #region Wrapper Methods
@@ -650,19 +866,19 @@ public class Plugin
         return true;
     }
 
-    unsafe void SetListener(TS3_VECTOR forward, TS3_VECTOR up)
+    unsafe void SetListener(Vector3 forward, Vector3 up)
     {
-        //Console.WriteLine($"[SE-TS Bridge] - Setting listener attribs. Forward: {{{forward.x}, {forward.y}, {forward.z}}}, Up: {{{up.x}, {up.y}, {up.z}}}.");
+        //Console.WriteLine($"[SE-TS Bridge] - Setting listener attribs. Forward: {forward}, Up: {up}.");
 
-        TS3_VECTOR zeroPos = default;
+        Vector3 zeroPos = default;
 
-        var err = (Ts3ErrorType)functions.systemset3DListenerAttributes(connHandlerId, &zeroPos, &forward, &up);
+        var err = (Ts3ErrorType)functions.systemset3DListenerAttributes(connHandlerId, (TS3_VECTOR*)&zeroPos, (TS3_VECTOR*)&forward, (TS3_VECTOR*)&up);
 
         if (err != Ts3ErrorType.ERROR_ok)
             Console.WriteLine($"[SE-TS Bridge] - Failed to set listener attribs. Error: {err}");
     }
 
-    unsafe void SetClientPos(ushort clientId, TS3_VECTOR position)
+    unsafe void SetClientPos(ushort clientId, Vector3 position)
     {
         if (clientId == 0)
         {
@@ -670,14 +886,14 @@ public class Plugin
             return;
         }
 
-        //Console.WriteLine($"[SE-TS Bridge] - Setting position of client {clientId} to {{{position.x}, {position.y}, {position.z}}}.");
+        //Console.WriteLine($"[SE-TS Bridge] - Setting position of client {clientId} to {position}.");
 
-        position.z = -position.z;
+        position.Z = -position.Z;
 
-        var err = (Ts3ErrorType)functions.channelset3DAttributes(connHandlerId, clientId, &position);
+        var err = (Ts3ErrorType)functions.channelset3DAttributes(connHandlerId, clientId, (TS3_VECTOR*)&position);
 
         if (err != Ts3ErrorType.ERROR_ok)
-            Console.WriteLine($"[SE-TS Bridge] - Failed to set client pos to {{{position.x}, {position.y}, {position.z}}}. Error: {err}");
+            Console.WriteLine($"[SE-TS Bridge] - Failed to set client pos to {position}. Error: {err}");
     }
 
     unsafe bool GetLocalClientAndChannelID()
@@ -766,9 +982,17 @@ public class Plugin
         }
     }
 
+    #endregion
+
     int ProcessCommand(string cmd)
     {
         int spaceIndex = cmd.IndexOf(' ');
+
+        if (spaceIndex < 0)
+        {
+            PrintMessageToCurrentTab($"Invalid command {cmd}");
+            return 0;
+        }
 
         switch (cmd.Substring(0, spaceIndex).ToLowerInvariant())
         {
@@ -836,7 +1060,7 @@ public class Plugin
             if (newChannelID != 0)
             {
                 RefetchTSClients();
-                SendLocalSteamIdToCurrentChannel();
+                SendLocalGameInfoToCurrentChannel();
             }
         }
         else if (newChannelID == currentChannelId)
@@ -854,7 +1078,7 @@ public class Plugin
                 client = AddClientThreadSafe(clientID, name);
             }
 
-            SendLocalSteamIdToClient(client);
+            SendLocalGameInfoToClient(client);
         }
         else if (oldChannelID == currentChannelId)
         {
@@ -875,8 +1099,6 @@ public class Plugin
             // A client either moved between channels that aren't the current channnel or they left the server.
         }
     }
-
-    #endregion
 
     // Docs https://teamspeakdocs.github.io/PluginAPI/client_html/index.html
 
@@ -935,7 +1157,7 @@ public class Plugin
         // The id buffer will invalidate after exiting this function.
         Unsafe.CopyBlock(instance.pluginID, id, sz);
 
-        Console.WriteLine("[SE-TS Bridge] - Registered plugin ID: " + System.Text.Encoding.UTF8.GetString(charSpan));
+        Console.WriteLine("[SE-TS Bridge] - Registered plugin ID: " + Encoding.UTF8.GetString(charSpan));
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_commandKeyword")]
@@ -1048,7 +1270,7 @@ public class Plugin
 
         // TODO: Scale volume down when client is facing away
 
-        float dist = Distance(default, client.Position);
+        float dist = Vector3.Distance(default, client.Position);
         *volume = Math.Clamp(1f / MathF.Pow((dist * instance.distanceScale) + 0.6f, instance.distanceFalloff), 0, 1);
 
         //Console.WriteLine($"DistScale: {instance.distanceScale}, DistFalloff: {instance.distanceFalloff}, Dist: {dist}, Vol: {*volume}");
@@ -1070,30 +1292,19 @@ public class Plugin
         if (!nameUtf8.SequenceEqual(DLLName))
             return;
 
-        var cmd = Marshal.PtrToStringUTF8((nint)pluginCommand);
-        var invoker = Marshal.PtrToStringUTF8((nint)invokerName);
-
         var client = instance.GetClientByClientId(invokerClientID);
+        var invokerNameStr = Marshal.PtrToStringUTF8((nint)invokerName);
 
         if (client == null)
         {
-            Console.WriteLine($"[SE-TS Bridge] - Received plugin command from unregistered client, ClientId: {invokerClientID}, InvokerName: {invoker}");
+            Console.WriteLine($"[SE-TS Bridge] - Received plugin command from unregistered client, ClientID: {invokerClientID}, InvokerName: {invokerNameStr}");
             return;
         }
 
-        Console.WriteLine($"[SE-TS Bridge] - Received plugin command, PluginName: {System.Text.Encoding.UTF8.GetString(nameUtf8)}, Command: {cmd}, InvokerClientId: {invokerClientID}, InvokerName: {invoker}");
+        var cmd = MemoryMarshal.CreateReadOnlySpanFromNullTerminated(pluginCommand);
 
-        if (cmd != null && cmd.StartsWith("TSSE,SteamId:"))
-        {
-            if (ulong.TryParse(cmd.AsSpan("TSSE,SteamId:".Length), out ulong steamId))
-            {
-                //Console.WriteLine($"[SE-TS Bridge] - Recieved SteamId for client, ClientId: {invokerClientID}, SteamId: {steamId}");
-                client.SteamID = steamId;
-                return;
-            }
-        }
-
-        Console.WriteLine($"[SE-TS Bridge] - Received invalid plugin command, Command: {cmd}, ClientId: {invokerClientID}");
+        if (cmd != null)
+            instance.HandlePluginCommandEvent(nameUtf8, cmd, client);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onClientDisplayNameChanged")]

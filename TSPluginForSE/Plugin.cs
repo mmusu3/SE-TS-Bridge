@@ -1,16 +1,18 @@
 ﻿using System;
 using System.Buffers;
 using System.Collections.Generic;
+using System.IO;
 using System.IO.Pipes;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
-using Sandbox.Engine.Networking;
 using Sandbox.Game.Entities;
 using Sandbox.Game.Entities.Character;
+using Sandbox.Game.Multiplayer;
 using Sandbox.Game.World;
 using Sandbox.ModAPI;
+using SharedPluginClasses;
 using VRage.Game.Components;
 using VRage.Game.ModAPI;
 using VRage.ModAPI;
@@ -22,6 +24,8 @@ namespace TSPluginForSE;
 
 public class Plugin : IPlugin
 {
+    static PluginVersion currentVersion = new(2, 0);
+
     internal class PlayerInfo
     {
         public IMyPlayer? InternalPlayer;
@@ -44,38 +48,11 @@ public class Plugin : IPlugin
     List<PlayerInfo> currentPlayers = new();
     List<PlayerInfo> newPlayers = new();
     List<PlayerInfo> removedPlayers = new();
-    NamedPipeServerStream pipeStream;
+    NamedPipeServerStream? pipeStream;
     CancellationTokenSource pipeCancellation;
     Task? connectTask;
 
     readonly Vector3 mouthOffset = new Vector3(0, 1.6f, -0.1f); // Approximate mouth offset
-
-    const int minor = 1;
-    const int patch = 2;
-    const int CurrentVersion = (0xABCD << 16) | (minor << 8) | patch; // 16 bits of magic value, 8 bits of major, 8 bits of minor
-
-    struct PlayerStatesHeader
-    {
-        public int Version;
-        public ulong LocalSteamId;
-        public Vector3 Forward;
-        public Vector3 Up;
-        public int PlayerCount;
-        public int RemovedPlayerCount;
-        public int NewPlayerCount;
-        public int NewPlayerByteLength;
-
-        public unsafe static readonly int Size = sizeof(PlayerStatesHeader);
-    }
-
-    struct ClientState
-    {
-        public ulong SteamID;
-        public Vector3 Position;
-        public bool HasConnection;
-
-        public unsafe static readonly int Size = sizeof(ClientState);
-    }
 
     const ushort mpMessageId = 42691; // Picked at random, may conflict with other mods.
 
@@ -83,7 +60,6 @@ public class Plugin : IPlugin
 
     public Plugin()
     {
-        pipeStream = null!;
         pipeCancellation = null!;
         mpMessageHandler = MPMessageHandler;
     }
@@ -104,9 +80,21 @@ public class Plugin : IPlugin
     {
         MyLog.Default.WriteLine("[SE-TS Bridge] Beginning connection.");
 
-        pipeStream = new NamedPipeServerStream("09C842DD-F683-4798-A95F-88B0981265BE", PipeDirection.Out, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
         pipeCancellation = new CancellationTokenSource();
-        connectTask = pipeStream.WaitForConnectionAsync(pipeCancellation.Token).ContinueWith(OnPipeConnected);
+
+        const PipeDirection direction = PipeDirection.Out;
+
+        try
+        {
+            pipeStream = new NamedPipeServerStream("09C842DD-F683-4798-A95F-88B0981265BE", direction, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+        }
+        catch (IOException)
+        {
+            pipeStream = null;
+        }
+
+        if (pipeStream != null)
+            connectTask = pipeStream.WaitForConnectionAsync(pipeCancellation.Token).ContinueWith(OnPipeConnected);
     }
 
     void OnPipeConnected(Task task)
@@ -129,35 +117,27 @@ public class Plugin : IPlugin
     {
         MyAPIGateway.Multiplayer?.UnregisterSecureMessageHandler(mpMessageId, mpMessageHandler);
 
-        if (!pipeStream.IsConnected)
+        if (pipeStream == null || !pipeStream.IsConnected)
             return;
 
         MyLog.Default.WriteLine($"[SE-TS Bridge] Removing {currentPlayers.Count} players due to session unload.");
 
-        var header = new PlayerStatesHeader {
-            Version = CurrentVersion,
-            LocalSteamId = MyGameService.UserId,
+        var updatePacket = new GameUpdatePacket {
+            Header = new GameUpdatePacketHeader {
+                Version = currentVersion.Packed,
+                InSession = false,
+                LocalSteamID = Sync.MyId,
+            },
             Forward = Vector3.Forward,
-            Up = Vector3.Up,
-            PlayerCount = 0,
-            RemovedPlayerCount = currentPlayers.Count,
-            NewPlayerCount = 0,
-            NewPlayerByteLength = 0
+            Up = Vector3.Up
         };
 
         var arrayPool = ArrayPool<byte>.Shared;
-        int dataSize = PlayerStatesHeader.Size + sizeof(ulong) * currentPlayers.Count;
+        int dataSize = GameUpdatePacket.Size;
         var buffer = arrayPool.Rent(dataSize);
         var span = buffer.AsSpan(0, dataSize);
-        Write(ref span, header);
 
-        if (currentPlayers.Count != 0)
-        {
-            foreach (var item in currentPlayers)
-                Write(ref span, item.SteamID);
-
-            currentPlayers.Clear();
-        }
+        Write(ref span, updatePacket);
 
         try
         {
@@ -176,12 +156,12 @@ public class Plugin : IPlugin
         MySession.OnLoading -= MySession_OnLoading;
         MySession.OnUnloading -= MySession_OnUnloading;
 
-        if (pipeStream.IsConnected)
+        if (pipeStream != null && pipeStream.IsConnected)
             pipeStream.Disconnect();
         else
             pipeCancellation.Cancel();
 
-        pipeStream.Dispose();
+        pipeStream?.Dispose();
         pipeCancellation.Dispose();
 
         currentPlayers.Clear();
@@ -243,9 +223,9 @@ public class Plugin : IPlugin
 
     public void Update()
     {
-        if (!pipeStream.IsConnected)
+        if (pipeStream == null || !pipeStream.IsConnected)
         {
-            if (connectTask == null || connectTask.IsCompleted || connectTask.IsFaulted)
+            if (pipeStream != null && (connectTask == null || connectTask.IsCompleted || connectTask.IsFaulted))
             {
                 MyLog.Default.WriteLine("[SE-TS Bridge] Restarting connection.");
                 MyAPIGateway.Utilities?.ShowMessage("SE-TS Bridge", "Restarting connection.");
@@ -259,30 +239,65 @@ public class Plugin : IPlugin
         }
 
         var session = MyAPIGateway.Session;
-
-        if (session == null || !MyAPIGateway.Multiplayer.MultiplayerActive)
-            return;
-
-        var pc = MyAPIGateway.Players;
-
-        if (pc == null)
-            return;
-
-        if (session.LocalHumanPlayer == null)
-            return;
+        var players = MyAPIGateway.Players;
 
         try
         {
-            SendUpdate(pc, session);
+            if (session != null
+                && MyAPIGateway.Multiplayer.MultiplayerActive
+                && players != null
+                && session.LocalHumanPlayer != null)
+            {
+                SendUpdate(players, session);
+            }
+            else
+            {
+                SendUpdate();
+            }
         }
         catch (Exception ex)
         {
-            if (ex is not System.IO.IOException)
+            if (ex is IOException)
+            {
+                MyLog.Default.WriteLine("[SE-TS Bridge] Connection closed.");
+                MyAPIGateway.Utilities?.ShowMessage("SE-TS Bridge", "Connection closed.");
+            }
+            else
             {
                 MyLog.Default.WriteLine("[SE-TS Bridge] Exception while updating.");
                 MyLog.Default.WriteLine(ex);
                 MyAPIGateway.Utilities?.ShowMessage("SE-TS Bridge", "Exception while updating.");
             }
+        }
+    }
+
+    void SendUpdate()
+    {
+        var updatePacket = new GameUpdatePacket {
+            Header = new GameUpdatePacketHeader {
+                Version = currentVersion.Packed,
+                InSession = false,
+                LocalSteamID = Sync.MyId,
+            },
+            Forward = Vector3.Forward,
+            Up = Vector3.Up
+        };
+
+        var arrayPool = ArrayPool<byte>.Shared;
+        int dataSize = GameUpdatePacket.Size;
+        var buffer = arrayPool.Rent(dataSize);
+        var span = buffer.AsSpan(0, dataSize);
+
+        Write(ref span, updatePacket);
+
+        try
+        {
+            pipeStream!.Write(buffer, 0, dataSize);
+            pipeStream.Flush();
+        }
+        finally
+        {
+            arrayPool.Return(buffer);
         }
     }
 
@@ -314,9 +329,12 @@ public class Plugin : IPlugin
         var localOrient = camera.WorldMatrix.Rotation;
         var inverseLocalOrient = Quaternion.Inverse(Quaternion.CreateFromRotationMatrix(camera.WorldMatrix.GetOrientation()));
 
-        var header = new PlayerStatesHeader {
-            Version = CurrentVersion,
-            LocalSteamId = localPlayer.SteamUserId,
+        var updatePacket = new GameUpdatePacket {
+            Header = new GameUpdatePacketHeader {
+                Version = currentVersion.Packed,
+                InSession = true,
+                LocalSteamID = localPlayer.SteamUserId,
+            },
             Forward = localOrient.Forward,
             Up = localOrient.Up,
             PlayerCount = currentPlayers.Count,
@@ -326,15 +344,15 @@ public class Plugin : IPlugin
         };
 
         var arrayPool = ArrayPool<byte>.Shared;
-        int dataSize = PlayerStatesHeader.Size
-            + ClientState.Size * currentPlayers.Count
+        int dataSize = GameUpdatePacket.Size
+            + ClientGameState.Size * currentPlayers.Count
             + sizeof(ulong) * removedPlayers.Count
             + newPlayersByteLength;
 
         var buffer = arrayPool.Rent(dataSize);
         var span = buffer.AsSpan(0, dataSize);
 
-        Write(ref span, header);
+        Write(ref span, updatePacket);
 
         if (currentPlayers.Count != 0)
         {
@@ -363,7 +381,7 @@ public class Plugin : IPlugin
                 var relPos = (Vector3)(pos - localPos);
                 relPos = Vector3.Transform(relPos, inverseLocalOrient);
 
-                var state = new ClientState {
+                var state = new ClientGameState {
                     SteamID = item.SteamID,
                     Position = relPos,
                     HasConnection = item.HasConnection
@@ -410,7 +428,7 @@ public class Plugin : IPlugin
 
         try
         {
-            pipeStream.Write(buffer, 0, dataSize);
+            pipeStream!.Write(buffer, 0, dataSize);
             pipeStream.Flush();
         }
         finally
@@ -491,14 +509,27 @@ public class Plugin : IPlugin
             if (playerId.SteamId == localPlayer.SteamUserId)
                 continue;
 
-            int index = currentPlayers.FindIndex(p => p.SteamID == playerId.SteamId);
+            int index = -1;
+
+            for (int i = 0; i < currentPlayers.Count; i++)
+            {
+                if (currentPlayers[i].SteamID == playerId.SteamId)
+                {
+                    index = i;
+                    break;
+                }
+            }
+
+            var pos = ((IMyEntity)character).GetPosition();
+            pos += Vector3.Transform(mouthOffset, character.WorldMatrix.GetOrientation());
 
             if (index == -1)
             {
-                var pos = ((IMyEntity)character).GetPosition();
-                pos += Vector3.Transform(mouthOffset, character.WorldMatrix.GetOrientation());
-
                 newPlayers.Add(new PlayerInfo(null, playerId.SteamId, character.GetIdentity().DisplayName, pos));
+            }
+            else if (currentPlayers[index].InternalPlayer == null)
+            {
+                currentPlayers[index].Position = pos;
             }
         }
     }

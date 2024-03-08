@@ -250,7 +250,7 @@ public unsafe struct TS3Functions
     public void printMessage(ulong serverConnectionHandlerID, /*const */byte* message, PluginMessageTarget messageTarget) => ((delegate*<ulong, /*const */byte*, PluginMessageTarget, void>)pointers[184])(serverConnectionHandlerID, message, messageTarget);
     public void printMessageToCurrentTab(/*const */byte* message) => ((delegate*</*const */byte*, void>)pointers[185])(message);
     public void urlsToBB(/*const */byte* text, byte* result, nint maxLen) => ((delegate*</*const */byte*, byte*, nint, void>)pointers[186])(text, result, maxLen);
-    public void sendPluginCommand(ulong serverConnectionHandlerID, /*const */byte* pluginID, /*const */byte* command, int targetMode, /*const */anyID* targetIDs, /*const */byte* returnCode) => ((delegate*<ulong, /*const */byte*, /*const */byte*, int, /*const */anyID*, /*const */byte*, void>)pointers[187])(serverConnectionHandlerID, pluginID, command, targetMode, targetIDs, returnCode);
+    public void sendPluginCommand(ulong serverConnectionHandlerID, /*const */byte* pluginID, /*const */byte* command, PluginTargetMode targetMode, /*const */anyID* targetIDs, /*const */byte* returnCode) => ((delegate*<ulong, /*const */byte*, /*const */byte*, PluginTargetMode, /*const */anyID*, /*const */byte*, void>)pointers[187])(serverConnectionHandlerID, pluginID, command, targetMode, targetIDs, returnCode);
     public void getDirectories(/*const */byte* path, byte* result, nint maxLen) => ((delegate*</*const */byte*, byte*, nint, void>)pointers[188])(path, result, maxLen);
     public uint getServerConnectInfo(ulong scHandlerID, byte* host, ushort* port, byte* password, nint maxLen) => ((delegate*<ulong, byte*, ushort*, byte*, nint, uint>)pointers[189])(scHandlerID, host, port, password, maxLen);
     public uint getChannelConnectInfo(ulong scHandlerID, ulong channelID, byte* path, byte* password, nint maxLen) => ((delegate*<ulong, ulong, byte*, byte*, nint, uint>)pointers[190])(scHandlerID, channelID, path, password, maxLen);
@@ -599,7 +599,7 @@ enum ClientProperties
 
 #region public_rare_definitions.h
 
-enum PluginTargetMode
+public enum PluginTargetMode
 {
     /// <summary>Send plugincmd to all clients in current channel.</summary>
     PluginCommandTarget_CURRENT_CHANNEL = 0,
@@ -754,7 +754,7 @@ public enum PluginConnectTab
 
 #region public_errors.h
 
-enum Ts3ErrorType
+enum Ts3ErrorType : uint
 {
     //general
     ///<summary>Indicates success.</summary>

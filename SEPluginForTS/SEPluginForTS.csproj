@@ -5,11 +5,14 @@
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <Platforms>x64</Platforms>
-    <Version>1.1.2</Version>
+    <Version>1.2.0</Version>
     <OutputPath>../Bin/SEPluginForTS</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <PublishAot>true</PublishAot>
     <IlcDisableReflection>true</IlcDisableReflection>
+    <DefineConstants>$(DefineConstants);TS_PLUGIN</DefineConstants>
   </PropertyGroup>
+
+  <Import Project="..\SharedPluginClasses\SharedPluginClasses.projitems" Label="Shared" />
 
 </Project>
