@@ -506,7 +506,7 @@ public class Plugin
         bool formatSuccess;
         int bytesWritten;
 
-        if (client == null || client.PluginVersion > new PluginVersion(1, 2))
+        if (client == null || client.PluginVersion.Packed == 0 || client.PluginVersion > new PluginVersion(1, 2))
             formatSuccess = Utf8.TryWrite(cbSpan, $"TSSE[{currentVersion.Packed}],GameInfo:{localSteamID}:{(isInGameSession ? 1 : 0)}", out bytesWritten);
         else
             formatSuccess = Utf8.TryWrite(cbSpan, $"TSSE,SteamId:{localSteamID}", out bytesWritten);
@@ -871,13 +871,16 @@ public class Plugin
             return;
         }
 
+        var origCmd = cmd;
         cmd = cmd.Slice("TSSE"u8.Length);
 
-        if (!cmd.StartsWith("["u8)) // Old protocol has no version
+        int splitIndex = cmd.IndexOf("["u8);
+
+        if (splitIndex == -1) // Old protocol has no version
         {
             if (!cmd.StartsWith(",SteamId:"u8))
             {
-                Console.WriteLine($"[SE-TS Bridge] - Recieved invalid PCE from ClientID: {invokerClient.ClientID}");
+                InvalidPCE(invokerClient.ClientID, origCmd);
                 return;
             }
 
@@ -901,41 +904,42 @@ public class Plugin
         }
         else
         {
-            int splitIndex = cmd.IndexOf("],"u8);
+            cmd = cmd.Slice(splitIndex + "["u8.Length);
+            splitIndex = cmd.IndexOf("],"u8);
 
             if (splitIndex == -1)
             {
-                Console.WriteLine($"[SE-TS Bridge] - Recieved invalid PCE from ClientID: {invokerClient.ClientID}");
+                InvalidPCE(invokerClient.ClientID, origCmd);
                 return;
             }
 
-            if (!uint.TryParse(cmd.Slice(0, splitIndex), out uint version))
+            var part = cmd[..splitIndex];
+
+            if (!uint.TryParse(part, out uint version))
             {
-                Console.WriteLine($"[SE-TS Bridge] - Recieved invalid PCE from ClientID: {invokerClient.ClientID}");
+                InvalidPCE2(invokerClient.ClientID, origCmd, part);
                 return;
             }
 
-            if (version != currentVersion.Packed)
-            {
-                var cmdVersion = new PluginVersion(version);
-                var (m, p) = cmdVersion.GetVersionNumbers();
+            var cmdVersion = new PluginVersion(version);
+            var (m, p) = cmdVersion.GetVersionNumbers();
 
-                if (cmdVersion.IsValid)
-                {
-                    invokerClient.PluginVersion = new PluginVersion(version);
-                    Console.WriteLine($"[SE-TS Bridge] - Recieved PCE from ClientID: {invokerClient.ClientID} with incorrect version: {m}.{p}");
-                }
-                else
-                {
-                    Console.WriteLine($"[SE-TS Bridge] - Recieved invalid PCE from ClientID: {invokerClient.ClientID}");
-                }
+            if (cmdVersion.IsValid)
+            {
+                invokerClient.PluginVersion = cmdVersion;
+            }
+            else
+            {
+                Console.WriteLine($"[SE-TS Bridge] - Recieved PCE from ClientID: {invokerClient.ClientID} with incorrect version: {version}, Minor:{m}, Patch:{p}");
+                InvalidPCE(invokerClient.ClientID, origCmd);
+                return;
             }
 
             cmd = cmd.Slice(splitIndex + "],"u8.Length);
 
             if (!cmd.StartsWith("GameInfo:"u8))
             {
-                Console.WriteLine($"[SE-TS Bridge] - Recieved invalid PCE from ClientID: {invokerClient.ClientID}");
+                InvalidPCE(invokerClient.ClientID, origCmd);
                 return;
             }
 
@@ -948,13 +952,17 @@ public class Plugin
                 return;
             }
 
-            if (!ulong.TryParse(cmd.Slice(0, splitIndex), out ulong steamID))
+            part = cmd[..splitIndex];
+
+            if (!ulong.TryParse(part, out ulong steamID))
             {
                 Console.WriteLine($"[SE-TS Bridge] - Recieved GameInfo PCE with invalid SteamID data from ClientID: {invokerClient.ClientID}.");
                 return;
             }
 
-            if (!int.TryParse(cmd.Slice(splitIndex + ":"u8.Length), out int inGameSession))
+            part = cmd.Slice(splitIndex + ":"u8.Length);
+
+            if (!int.TryParse(part, out int inGameSession))
             {
                 Console.WriteLine($"[SE-TS Bridge] - Recieved GameInfo PCE with invalid InGameSession data from ClientID: {invokerClient.ClientID}.");
                 return;
@@ -967,6 +975,20 @@ public class Plugin
             DebugConsole($"[SE-TS Bridge] - Recieved GameInfo for ClientID: {invokerClient.ClientID}. SteamID: {steamID}, InGameSession: {invokerClient.InGameSession}");
 
             UpdateLocalMutingForClient(invokerClient);
+        }
+
+        static void InvalidPCE(ushort clientID, ReadOnlySpan<byte> cmd)
+        {
+            var cmdStr = Encoding.UTF8.GetString(cmd);
+            Console.WriteLine($"[SE-TS Bridge] - Recieved invalid PCE from ClientID: {clientID}, Cmd: {cmdStr}");
+        }
+
+        static void InvalidPCE2(ushort clientID, ReadOnlySpan<byte> cmd, ReadOnlySpan<byte> part)
+        {
+            var cmdStr = Encoding.UTF8.GetString(cmd);
+            var partStr = Encoding.UTF8.GetString(part);
+
+            Console.WriteLine($"[SE-TS Bridge] - Recieved invalid PCE from ClientID: {clientID}, Cmd: {cmdStr}, Part: {partStr}");
         }
     }
 
