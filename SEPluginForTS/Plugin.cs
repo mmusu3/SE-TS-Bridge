@@ -350,7 +350,7 @@ public class Plugin
             }
         }
 
-        SendLocalGameInfoToCurrentChannel();
+        SendLocalInfoToCurrentChannel();
 
         if (cancellationToken.IsCancellationRequested)
             return;
@@ -424,7 +424,7 @@ public class Plugin
         localSteamID = header.LocalSteamID;
 
         if (inSessionDifferent || steamIdChanged)
-            SendLocalGameInfoToCurrentChannel();
+            SendLocalInfoToCurrentChannel();
 
         if (bytes != GameUpdatePacket.Size)
             return (UpdateResult.Corrupt, $"Expected {GameUpdatePacket.Size} bytes, got {bytes}");
@@ -483,23 +483,20 @@ public class Plugin
         return (UpdateResult.OK, null);
     }
 
-    void SendLocalGameInfoToCurrentChannel()
+    void SendLocalInfoToCurrentChannel()
     {
-        //Console.WriteLine("[SE-TS Bridge] - SendLocalGameInfoToCurrentChannel()");
-        SendLocalGameInfoToClientOrChannel(null);
+        //Console.WriteLine("[SE-TS Bridge] - SendLocalInfoToCurrentChannel()");
+        SendLocalInfoToClientOrChannel(null);
     }
 
-    void SendLocalGameInfoToClient(Client client)
+    void SendLocalInfoToClient(Client client)
     {
-        //Console.WriteLine($"[SE-TS Bridge] - SendLocalGameInfoToClient({client.ClientID})");
-        SendLocalGameInfoToClientOrChannel(client);
+        //Console.WriteLine($"[SE-TS Bridge] - SendLocalInfoToClient({client.ClientID})");
+        SendLocalInfoToClientOrChannel(client);
     }
 
-    unsafe void SendLocalGameInfoToClientOrChannel(Client? client)
+    unsafe void SendLocalInfoToClientOrChannel(Client? client)
     {
-        if (localSteamID == 0)
-            return;
-
         byte* commandBuffer = stackalloc byte[64];
         var cbSpan = new Span<byte>(commandBuffer, 63);
 
@@ -508,8 +505,10 @@ public class Plugin
 
         if (client == null || client.PluginVersion.Packed == 0 || client.PluginVersion > new PluginVersion(1, 2))
             formatSuccess = Utf8.TryWrite(cbSpan, $"TSSE[{currentVersion.Packed}],GameInfo:{localSteamID}:{(isInGameSession ? 1 : 0)}", out bytesWritten);
-        else
+        else if (localSteamID != 0)
             formatSuccess = Utf8.TryWrite(cbSpan, $"TSSE,SteamId:{localSteamID}", out bytesWritten);
+        else
+            return;
 
         commandBuffer[bytesWritten] = 0;
 
@@ -518,7 +517,7 @@ public class Plugin
 
         if (client != null)
         {
-            uint clientIdAndTerm = client.ClientID; // Upper 16 bits is zero term
+            uint clientIdAndTerm = client.ClientID; // Upper 16 bits is zero terminator
 
             functions.sendPluginCommand(connHandlerId, pluginID, commandBuffer, PluginTargetMode.PluginCommandTarget_CLIENT, (ushort*)&clientIdAndTerm, null);
         }
@@ -900,7 +899,7 @@ public class Plugin
 
             // invokerClient will not have recieved our info since it could not
             // parse it. Send it again now that its version is known.
-            SendLocalGameInfoToClient(invokerClient);
+            SendLocalInfoToClient(invokerClient);
         }
         else
         {
@@ -1285,7 +1284,7 @@ public class Plugin
             {
                 RefetchTSClients();
                 UpdateLocalMutingForAllClients();
-                SendLocalGameInfoToCurrentChannel();
+                SendLocalInfoToCurrentChannel();
             }
         }
         else if (newChannelID == currentChannelId)
@@ -1304,7 +1303,7 @@ public class Plugin
             }
 
             UpdateLocalMutingForClient(client);
-            SendLocalGameInfoToClient(client);
+            SendLocalInfoToClient(client);
         }
         else if (oldChannelID == currentChannelId)
         {
@@ -1426,6 +1425,8 @@ public class Plugin
             {
                 instance.RefetchTSClients();
                 instance.Set3DSettings(instance.distanceScale, 1);
+                instance.UpdateLocalMutingForAllClients();
+                instance.SendLocalInfoToCurrentChannel();
             }
         }
         else if (connStatus == ConnectStatus.STATUS_DISCONNECTED)
