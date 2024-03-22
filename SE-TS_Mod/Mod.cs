@@ -15,7 +15,6 @@ namespace SETSMod
         const ushort mpMessageId = 42691; // Picked at random, may conflict with other mods.
 
         AntennaSystemHelper antennaSystemHelper = new AntennaSystemHelper();
-        SerializationHelper serializationHelper = new SerializationHelper();
 
         List<IMyPlayer> playerList = new List<IMyPlayer>();
 
@@ -58,45 +57,60 @@ namespace SETSMod
             MyAPIGateway.Players.GetPlayers(playerList);
 
             int playerCount = playerList.Count - 1;
-            int numBytes = sizeof(int) + sizeof(int) + playerCount * (sizeof(ulong) + sizeof(bool));
-            var message = new byte[numBytes]; // TODO: Array pooling
+            var message = GetMessageBuffer(playerCount);
 
             foreach (var player in playerList)
-                SendUpdateToPlayer(player, playerList, message);
+                SendUpdateToPlayer(player, playerList, playerCount, ref message);
 
             playerList.Clear();
         }
 
-        void SendUpdateToPlayer(IMyPlayer player, List<IMyPlayer> otherPlayers, byte[] message)
+        static MessageBuffer GetMessageBuffer(int playerCount)
         {
-            int offset = 0;
-            int playerCount = otherPlayers.Count - 1;
+            int numBytes = sizeof(int) + sizeof(int) + playerCount * (sizeof(ulong) + sizeof(bool));
+            var array = new byte[numBytes]; // TODO: Array pooling
 
-            serializationHelper.Write(message, ref offset, message.Length);
-            serializationHelper.Write(message, ref offset, playerCount);
+            return new MessageBuffer { Array = array };
+        }
 
-            foreach (var other in otherPlayers)
+        void SendUpdateToPlayer(IMyPlayer player, List<IMyPlayer> playerList, int playerCount, ref MessageBuffer message)
+        {
+            message.Reset();
+            message.Write(message.Length);
+            message.Write(playerCount);
+
+            foreach (var other in playerList)
             {
-                if (other == player)
-                    continue;
-
-                MyIDModule idModule;
-
-                bool hasConnection = OwnershipHelper.TryGetIDModule(other.Character, out idModule)
-                    && OwnershipHelper.IsFriendlyRelation(idModule.GetUserRelationToOwner(player.IdentityId));
-
-                if (hasConnection)
-                {
-                    // TODO: Improve perf by removing redundant checks with shared antennas
-                    // TODO: Count relay hops
-                    hasConnection = antennaSystemHelper.CheckConnection(other.Character, player.Character, player.IdentityId);
-                }
-
-                serializationHelper.Write(message, ref offset, other.SteamUserId);
-                serializationHelper.Write(message, ref offset, hasConnection);
+                if (other != player)
+                    WriteMessagePart(player, other.Character, other.SteamUserId, ref message);
             }
 
-            MyAPIGateway.Multiplayer.SendMessageTo(mpMessageId, message, player.SteamUserId, reliable: true);
+            MyAPIGateway.Multiplayer.SendMessageTo(mpMessageId, message.Array, player.SteamUserId, reliable: true);
+        }
+
+        void WriteMessagePart(IMyPlayer player, IMyCharacter otherCharacter, ulong otherUserId, ref MessageBuffer message)
+        {
+            bool hasConnection = PlayerHasConnectionTo(player, otherCharacter);
+
+            message.Write(otherUserId);
+            message.Write(hasConnection);
+        }
+
+        bool PlayerHasConnectionTo(IMyPlayer player, IMyCharacter otherCharacter)
+        {
+            MyIDModule idModule;
+
+            bool hasConnection = OwnershipHelper.TryGetIDModule(otherCharacter, out idModule)
+                && OwnershipHelper.IsFriendlyRelation(idModule.GetUserRelationToOwner(player.IdentityId));
+
+            if (hasConnection)
+            {
+                // TODO: Improve perf by removing redundant checks with shared antennas
+                // TODO: Count relay hops
+                hasConnection = antennaSystemHelper.CheckConnection(otherCharacter, player.Character, player.IdentityId);
+            }
+
+            return hasConnection;
         }
     }
 
@@ -216,33 +230,63 @@ namespace SETSMod
         }
     }
 
-    class SerializationHelper
+    static class SerializationHelper
     {
-        public void Write(byte[] bytes, ref int offset, int value)
+        public static void Write(byte[] bytes, int offset, int value)
         {
-            bytes[offset + 0] = (byte)((value >> 0) & 0xFF);
-            bytes[offset + 1] = (byte)((value >> 8) & 0xFF);
-            bytes[offset + 2] = (byte)((value >> 16) & 0xFF);
-            bytes[offset + 3] = (byte)((value >> 24) & 0xFF);
+            int o = offset;
+            bytes[o + 0] = (byte)(value >> 0);
+            bytes[o + 1] = (byte)(value >> 8);
+            bytes[o + 2] = (byte)(value >> 16);
+            bytes[o + 3] = (byte)(value >> 24);
+        }
+
+        public static void Write(byte[] bytes, int offset, ulong value)
+        {
+            int o = offset;
+            bytes[o + 0] = (byte)(value >> 0);
+            bytes[o + 1] = (byte)(value >> 8);
+            bytes[o + 2] = (byte)(value >> 16);
+            bytes[o + 3] = (byte)(value >> 24);
+            bytes[o + 4] = (byte)(value >> 32);
+            bytes[o + 5] = (byte)(value >> 40);
+            bytes[o + 6] = (byte)(value >> 48);
+            bytes[o + 7] = (byte)(value >> 56);
+        }
+
+        public static void Write(byte[] bytes, int offset, bool value)
+        {
+            bytes[offset] = (byte)(value ? 1 : 0);
+        }
+    }
+
+    struct MessageBuffer
+    {
+        public byte[] Array;
+        int offset;
+
+        public int Length => Array.Length;
+
+        public void Reset()
+        {
+            offset = 0;
+        }
+
+        public void Write(int value)
+        {
+            SerializationHelper.Write(Array, offset, value);
             offset += sizeof(int);
         }
 
-        public void Write(byte[] bytes, ref int offset, ulong value)
+        public void Write(ulong value)
         {
-            bytes[offset + 0] = (byte)((value >> 0) & 0xFF);
-            bytes[offset + 1] = (byte)((value >> 8) & 0xFF);
-            bytes[offset + 2] = (byte)((value >> 16) & 0xFF);
-            bytes[offset + 3] = (byte)((value >> 24) & 0xFF);
-            bytes[offset + 4] = (byte)((value >> 32) & 0xFF);
-            bytes[offset + 5] = (byte)((value >> 40) & 0xFF);
-            bytes[offset + 6] = (byte)((value >> 48) & 0xFF);
-            bytes[offset + 7] = (byte)((value >> 56) & 0xFF);
+            SerializationHelper.Write(Array, offset, value);
             offset += sizeof(ulong);
         }
 
-        public void Write(byte[] bytes, ref int offset, bool value)
+        public void Write(bool value)
         {
-            bytes[offset] = (byte)(value ? 1 : 0);
+            SerializationHelper.Write(Array, offset, value);
             offset += sizeof(bool);
         }
     }
