@@ -32,7 +32,7 @@
   </ItemGroup>
 
   <Target Name="PostBuild" AfterTargets="PostBuildEvent">
-    <Exec Command="xcopy $(MSBuildProjectDirectory)\Mod.cs &quot;%appdata%\SpaceEngineers\Mods\SE-TS_Mod\Data\Scripts\&quot; /y" />
+    <Exec Command="xcopy $(MSBuildProjectDirectory)\Mod.cs &quot;%appdata%\SpaceEngineers\Mods\SE-TS_Mod\Data\Scripts\SE-TS_Mod\&quot; /y" />
   </Target>
 
 </Project>
