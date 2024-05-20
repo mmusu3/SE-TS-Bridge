@@ -17,7 +17,7 @@ namespace SEPluginForTS;
 
 public class Plugin
 {
-    static PluginVersion currentVersion = new(2, 0);
+    static PluginVersion currentVersion = new(2, 1);
 
     // NOTE: Must be kept in sync with the project settings.
     static ReadOnlySpan<byte> DLLName => "SEPluginForTS"u8;

@@ -24,7 +24,7 @@ namespace TSPluginForSE;
 
 public class Plugin : IPlugin
 {
-    static PluginVersion currentVersion = new(2, 0);
+    static PluginVersion currentVersion = new(2, 1);
 
     internal class PlayerInfo
     {
@@ -120,7 +120,9 @@ public class Plugin : IPlugin
         if (pipeStream == null || !pipeStream.IsConnected)
             return;
 
-        MyLog.Default.WriteLine($"[SE-TS Bridge] Removing {currentPlayers.Count} players due to session unload.");
+        MyLog.Default.WriteLine($"[SE-TS Bridge] Clearing {currentPlayers.Count} players due to session unload.");
+
+        currentPlayers.Clear();
 
         var updatePacket = new GameUpdatePacket {
             Header = new GameUpdatePacketHeader {
