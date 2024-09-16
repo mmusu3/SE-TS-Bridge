@@ -38,6 +38,8 @@ readonly struct PluginVersion
     public override bool Equals(object? obj) => obj is PluginVersion version && Packed == version.Packed;
     public override int GetHashCode() => (int)Packed;
 
+    public override string ToString() => IsValid ? $"1.{Minor}.{Patch}" : "Invalid Version";
+
     public static bool operator ==(PluginVersion a, PluginVersion b) => a.Packed == b.Packed;
     public static bool operator !=(PluginVersion a, PluginVersion b) => a.Packed != b.Packed;
 

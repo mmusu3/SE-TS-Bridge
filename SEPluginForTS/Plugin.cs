@@ -985,8 +985,8 @@ public class Plugin
             invokerClient.SteamID = steamID;
             invokerClient.InGameSession = inGameSession != 0;
 
-            ReleaseConsole($"[SE-TS Bridge] - Recieved GameInfo for ClientID: {invokerClient.ClientID}. InGameSession: {invokerClient.InGameSession}");
-            DebugConsole($"[SE-TS Bridge] - Recieved GameInfo for ClientID: {invokerClient.ClientID}. SteamID: {steamID}, InGameSession: {invokerClient.InGameSession}");
+            ReleaseConsole($"[SE-TS Bridge] - Recieved GameInfo for ClientID: {invokerClient.ClientID}. Version: {version}, InGameSession: {invokerClient.InGameSession}");
+            DebugConsole($"[SE-TS Bridge] - Recieved GameInfo for ClientID: {invokerClient.ClientID}. SteamID: {steamID}, Version: {version}, InGameSession: {invokerClient.InGameSession}");
 
             UpdateLocalMutingForClient(invokerClient);
         }
