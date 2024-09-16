@@ -116,6 +116,8 @@ public class Plugin
 
     unsafe void Init()
     {
+        AddOrPrintConsoleMessage("[SE-TS Bridge] - Initializing.");
+
         connHandlerId = functions.getCurrentServerConnectionHandlerID();
 
         int connectionStatus = 0;
@@ -213,6 +215,8 @@ public class Plugin
 
     async ValueTask ConnectPipe(CancellationToken cancellationToken)
     {
+        bool printWaitMessage = true;
+
         while (!cancellationToken.IsCancellationRequested)
         {
             try
@@ -231,6 +235,12 @@ public class Plugin
                 pipeStream!.Dispose();
                 pipeStream = null;
                 return;
+            }
+
+            if (printWaitMessage)
+            {
+                AddOrPrintConsoleMessage("[SE-TS Bridge] - Waiting for game connection.");
+                printWaitMessage = false;
             }
 
             await Task.Delay(TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
