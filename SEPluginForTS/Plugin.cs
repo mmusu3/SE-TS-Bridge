@@ -2,6 +2,7 @@
 using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.IO.Pipes;
 using System.Numerics;
@@ -1005,11 +1006,13 @@ public class Plugin
             return 0;
         }
 
+        var argSpan = cmd.AsSpan(spaceIndex).Trim();
+
         switch (cmd.Substring(0, spaceIndex).ToLowerInvariant())
         {
         case "distancescale":
             {
-                if (float.TryParse(cmd.AsSpan(spaceIndex).Trim(), out float value))
+                if (TryParseArgValue(argSpan, out float value))
                 {
                     distanceScale = value;
 
@@ -1018,48 +1021,32 @@ public class Plugin
                     else
                         PrintMessageToCurrentTab($"Error, failed to set distance scale value.");
                 }
-                else
-                {
-                    PrintMessageToCurrentTab($"Error, failed to parse value.");
-                }
                 break;
             }
         case "distancefalloff":
             {
-                if (float.TryParse(cmd.AsSpan(spaceIndex).Trim(), out float value))
+                if (TryParseArgValue(argSpan, out float value))
                 {
                     distanceFalloff = value;
                     PrintMessageToCurrentTab($"Setting distance falloff to {value}");
-                }
-                else
-                {
-                    PrintMessageToCurrentTab($"Error, failed to parse value.");
                 }
                 break;
             }
         case "maxdistance":
             {
-                if (float.TryParse(cmd.AsSpan(spaceIndex).Trim(), out float value))
+                if (TryParseArgValue(argSpan, out float value))
                 {
                     maxDistance = value;
                     PrintMessageToCurrentTab($"Setting max distance to {value}");
-                }
-                else
-                {
-                    PrintMessageToCurrentTab($"Error, failed to parse value.");
                 }
                 break;
             }
         case "useantennas":
             {
-                if (bool.TryParse(cmd.AsSpan(spaceIndex).Trim(), out bool value))
+                if (TryParseArgValue(argSpan, out bool value))
                 {
                     useAntennaConnections = value;
                     PrintMessageToCurrentTab($"Setting use antennas to {value}");
-                }
-                else
-                {
-                    PrintMessageToCurrentTab($"Error, failed to parse value.");
                 }
                 break;
             }
@@ -1069,6 +1056,16 @@ public class Plugin
         }
 
         return 0;
+
+        bool TryParseArgValue<T>(ReadOnlySpan<char> arg, [NotNullWhen(true)] out T? value)
+            where T : ISpanParsable<T>
+        {
+            if (T.TryParse(arg, null, out value))
+                return true;
+
+            PrintMessageToCurrentTab($"Error, failed to parse value.");
+            return false;
+        }
     }
 
     void HandleClientMoved(ulong serverConnectionHandlerID, ushort clientID, ulong oldChannelID, ulong newChannelID)
