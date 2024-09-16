@@ -101,7 +101,7 @@ namespace SETSMod
             MyIDModule idModule;
 
             bool hasConnection = OwnershipHelper.TryGetIDModule(otherCharacter, out idModule)
-                && OwnershipHelper.IsFriendlyRelation(idModule.GetUserRelationToOwner(player.IdentityId));
+                && OwnershipHelper.HasFriendlyRelation(idModule.Owner, player.IdentityId);
 
             if (hasConnection)
             {
@@ -212,18 +212,75 @@ namespace SETSMod
             return owner != null && owner.GetComponent(out idModule);
         }
 
+        public static bool IsFriendlyRelation(MyRelationsBetweenPlayers relation)
+        {
+            switch (relation)
+            {
+            case MyRelationsBetweenPlayers.Self:
+            case MyRelationsBetweenPlayers.Allies:
+                return true;
+
+            case MyRelationsBetweenPlayers.Neutral:
+            case MyRelationsBetweenPlayers.Enemies:
+                break;
+            }
+
+            return false;
+        }
+
         public static bool IsFriendlyRelation(MyRelationsBetweenPlayerAndBlock relation)
         {
             switch (relation)
             {
-            case MyRelationsBetweenPlayerAndBlock.NoOwnership:
-            case MyRelationsBetweenPlayerAndBlock.Neutral:
-            case MyRelationsBetweenPlayerAndBlock.Enemies:
-                break;
             case MyRelationsBetweenPlayerAndBlock.Owner:
             case MyRelationsBetweenPlayerAndBlock.FactionShare:
             case MyRelationsBetweenPlayerAndBlock.Friends:
                 return true;
+
+            case MyRelationsBetweenPlayerAndBlock.NoOwnership:
+            case MyRelationsBetweenPlayerAndBlock.Neutral:
+            case MyRelationsBetweenPlayerAndBlock.Enemies:
+                break;
+            }
+
+            return false;
+        }
+
+        public static bool HasFriendlyRelation(long owner, long user)
+        {
+            if (owner == user)
+                return true;//MyRelationsBetweenPlayers.Self;
+
+            if (owner == 0 || user == 0)
+                return false;//MyRelationsBetweenPlayers.Neutral;
+
+            var factions = MyAPIGateway.Session.Factions;
+
+            var userFaction = factions.TryGetPlayerFaction(user);
+            var ownerFaction = factions.TryGetPlayerFaction(owner);
+
+            if (userFaction == null && ownerFaction == null)
+                return false;//MyRelationsBetweenPlayers.Enemies;
+
+            if (userFaction == ownerFaction)
+                return true;//MyRelationsBetweenPlayers.Allies;
+
+            if (userFaction == null)
+                return ownerFaction.IsFriendly(user);
+
+            if (ownerFaction == null)
+                return userFaction.IsFriendly(owner);
+
+            var factionRelation = factions.GetRelationBetweenFactions(ownerFaction.FactionId, userFaction.FactionId);
+
+            switch (factionRelation)
+            {
+            case MyRelationsBetweenFactions.Neutral:
+            //case MyRelationsBetweenFactions.Allies:
+            case MyRelationsBetweenFactions.Friends:
+                return true;
+            case MyRelationsBetweenFactions.Enemies:
+                break;
             }
 
             return false;

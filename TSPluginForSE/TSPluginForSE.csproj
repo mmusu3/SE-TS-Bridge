@@ -3,12 +3,11 @@
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
     <LangVersion>latest</LangVersion>
-    <RootNamespace>SETSPlugin</RootNamespace>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <OutputPath>../Bin/TSPluginForSE</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <Platforms>x64</Platforms>
-    <Version>1.2.1</Version>
+    <Version>1.2.2</Version>
     <Nullable>enable</Nullable>
     <DefineConstants>$(DefineConstants);SE_PLUGIN</DefineConstants>
   </PropertyGroup>

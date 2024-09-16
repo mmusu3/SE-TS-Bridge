@@ -17,7 +17,7 @@ namespace SEPluginForTS;
 
 public class Plugin
 {
-    static PluginVersion currentVersion = new(2, 1);
+    static PluginVersion currentVersion = new(2, 2);
 
     // NOTE: Must be kept in sync with the project settings.
     static ReadOnlySpan<byte> DLLName => "SEPluginForTS"u8;
@@ -25,7 +25,7 @@ public class Plugin
     static readonly IntPtr PluginNamePtr = AllocHGlobalUTF8("SE-TS Bridge"u8);
     static readonly IntPtr PluginVersionPtr = AllocVersionStringUTF8();
     static readonly IntPtr PluginAuthorPtr = AllocHGlobalUTF8("Remaarn"u8);
-    static readonly IntPtr PluginDescriptionPtr = AllocHGlobalUTF8("This plugin integrates with Space Engineers to enable positional audio."u8);
+    static readonly IntPtr PluginDescriptionPtr = AllocHGlobalUTF8("This plugin enables the use of TeamSpeak's positional audio feature with the game Space Engineers."u8);
     static readonly IntPtr CommandKeywordPtr = AllocHGlobalUTF8("setsbridge"u8);
 
     static Plugin instance = new();
@@ -37,8 +37,8 @@ public class Plugin
     ushort localClientId;
     ulong currentChannelId;
 
-    Vector3 listenerForward = new() { X = 0, Y = 0, Z = -1 };
-    Vector3 listenerUp = new() { X = 0, Y = 1, Z = 0 };
+    Vector3 listenerForward = new(0, 0, -1);
+    Vector3 listenerUp = new(0, 1, 0);
 
     float minDistance = 1.3f;
     float distanceScale = 0.05f;
@@ -51,7 +51,7 @@ public class Plugin
     bool useAntennaConnections = true;
     bool useLocalMuting = false;
 
-    List<string> pendingConsoleMessages = new();
+    List<string> pendingConsoleMessages = [];
     bool messageDelayComplete;
 
     string? remoteComputerName;
@@ -73,7 +73,7 @@ public class Plugin
         public bool IsWhispering;
     }
 
-    readonly List<Client> clients = new();
+    readonly List<Client> clients = [];
 
     readonly MemoryPool<byte> memPool = MemoryPool<byte>.Shared;
 
@@ -719,7 +719,9 @@ public class Plugin
 
     void UpdateClientPosition(Client client)
     {
-        SetClientPos(client.ClientID, client.IsWhispering && (client.HasConnection || !useAntennaConnections) ? default : client.Position);
+        bool noPosition = client.IsWhispering && (client.HasConnection || !useAntennaConnections);
+
+        SetClientPos(client.ClientID, noPosition ? default : client.Position);
     }
 
     void ResetAllClientPositions()
@@ -782,6 +784,8 @@ public class Plugin
         if (err != Ts3ErrorType.ERROR_ok)
             Console.WriteLine($"[SE-TS Bridge] - Failed to free client list. Error: {err}");
     }
+
+    // TODO: Replace local muting with whisper list
 
     [Conditional("DEBUG")]
     void CheckClientLocalMuting(Client client)
@@ -914,22 +918,22 @@ public class Plugin
 
             var part = cmd[..splitIndex];
 
-            if (!uint.TryParse(part, out uint version))
+            if (!uint.TryParse(part, out uint versionPart))
             {
                 InvalidPCE2(invokerClient.ClientID, origCmd, part);
                 return;
             }
 
-            var cmdVersion = new PluginVersion(version);
-            var (m, p) = cmdVersion.GetVersionNumbers();
+            var version = new PluginVersion(versionPart);
+            var (m, p) = version.GetVersionNumbers();
 
-            if (cmdVersion.IsValid)
+            if (version.IsValid)
             {
-                invokerClient.PluginVersion = cmdVersion;
+                invokerClient.PluginVersion = version;
             }
             else
             {
-                Console.WriteLine($"[SE-TS Bridge] - Recieved PCE from ClientID: {invokerClient.ClientID} with incorrect version: {version}, Minor:{m}, Patch:{p}");
+                Console.WriteLine($"[SE-TS Bridge] - Recieved PCE from ClientID: {invokerClient.ClientID} with incorrect version: {versionPart}, Minor:{m}, Patch:{p}");
                 InvalidPCE(invokerClient.ClientID, origCmd);
                 return;
             }
@@ -989,6 +993,143 @@ public class Plugin
 
             Console.WriteLine($"[SE-TS Bridge] - Recieved invalid PCE from ClientID: {clientID}, Cmd: {cmdStr}, Part: {partStr}");
         }
+    }
+
+    int ProcessCommand(string cmd)
+    {
+        int spaceIndex = cmd.IndexOf(' ');
+
+        if (spaceIndex < 0)
+        {
+            PrintMessageToCurrentTab($"Invalid command {cmd}");
+            return 0;
+        }
+
+        switch (cmd.Substring(0, spaceIndex).ToLowerInvariant())
+        {
+        case "distancescale":
+            {
+                if (float.TryParse(cmd.AsSpan(spaceIndex).Trim(), out float value))
+                {
+                    distanceScale = value;
+
+                    if (Set3DSettings(distanceScale, 1))
+                        PrintMessageToCurrentTab($"Setting distance scale to {value}");
+                    else
+                        PrintMessageToCurrentTab($"Error, failed to set distance scale value.");
+                }
+                else
+                {
+                    PrintMessageToCurrentTab($"Error, failed to parse value.");
+                }
+                break;
+            }
+        case "distancefalloff":
+            {
+                if (float.TryParse(cmd.AsSpan(spaceIndex).Trim(), out float value))
+                {
+                    distanceFalloff = value;
+                    PrintMessageToCurrentTab($"Setting distance falloff to {value}");
+                }
+                else
+                {
+                    PrintMessageToCurrentTab($"Error, failed to parse value.");
+                }
+                break;
+            }
+        case "maxdistance":
+            {
+                if (float.TryParse(cmd.AsSpan(spaceIndex).Trim(), out float value))
+                {
+                    maxDistance = value;
+                    PrintMessageToCurrentTab($"Setting max distance to {value}");
+                }
+                else
+                {
+                    PrintMessageToCurrentTab($"Error, failed to parse value.");
+                }
+                break;
+            }
+        case "useantennas":
+            {
+                if (bool.TryParse(cmd.AsSpan(spaceIndex).Trim(), out bool value))
+                {
+                    useAntennaConnections = value;
+                    PrintMessageToCurrentTab($"Setting use antennas to {value}");
+                }
+                else
+                {
+                    PrintMessageToCurrentTab($"Error, failed to parse value.");
+                }
+                break;
+            }
+        default:
+            PrintMessageToCurrentTab($"Invalid command {cmd}");
+            break;
+        }
+
+        return 0;
+    }
+
+    void HandleClientMoved(ulong serverConnectionHandlerID, ushort clientID, ulong oldChannelID, ulong newChannelID)
+    {
+        if (serverConnectionHandlerID != connHandlerId)
+            return;
+
+        if (clientID == localClientId)
+        {
+            currentChannelId = newChannelID;
+            Console.WriteLine($"[SE-TS Bridge] - Current channel changed. NewChannelID: {newChannelID}");
+
+            if (newChannelID != 0)
+                OnLocalChannelChanged();
+        }
+        else if (newChannelID == currentChannelId)
+        {
+            var client = GetClientByClientId(clientID);
+
+            if (client != null)
+            {
+                Console.WriteLine($"[SE-TS Bridge] - Client joined current channel but was already registered. ClientID: {clientID}, ClientName: {client.ClientName}, NewChannelID: {newChannelID}");
+            }
+            else
+            {
+                var name = GetClientName(clientID);
+                Console.WriteLine($"[SE-TS Bridge] - New client joined current channel. ClientID: {clientID}, ClientName: {name}, NewChannelID: {newChannelID}");
+                client = AddClientThreadSafe(clientID, name);
+            }
+
+            UpdateLocalMutingForClient(client);
+            SendLocalInfoToClient(client);
+        }
+        else if (oldChannelID == currentChannelId)
+        {
+            var client = GetClientByClientId(clientID);
+
+            if (client != null)
+            {
+                Console.WriteLine($"[SE-TS Bridge] - Client left current channel. ClientID: {clientID}, ClientName: {client.ClientName}, NewChannelID: {newChannelID}");
+                RemoveClientThreadSafe(client, newChannelID != 0);
+            }
+            else
+            {
+                Console.WriteLine($"[SE-TS Bridge] - Unregistered client left current channel. ClientID: {clientID}, OldChannelID: {oldChannelID}");
+            }
+
+            if (useLocalMuting)
+                UnmuteClientLocally(serverConnectionHandlerID, clientID);
+        }
+        else
+        {
+            // A client either moved between channels that aren't the current channnel or they left the server.
+        }
+    }
+
+    void OnLocalChannelChanged()
+    {
+        RefetchTSClients();
+        UpdateLocalMutingForAllClients();
+        SendLocalInfoToCurrentChannel();
     }
 
     #region Wrapper Methods
@@ -1194,140 +1335,6 @@ public class Plugin
 
     #endregion
 
-    int ProcessCommand(string cmd)
-    {
-        int spaceIndex = cmd.IndexOf(' ');
-
-        if (spaceIndex < 0)
-        {
-            PrintMessageToCurrentTab($"Invalid command {cmd}");
-            return 0;
-        }
-
-        switch (cmd.Substring(0, spaceIndex).ToLowerInvariant())
-        {
-        case "distancescale":
-            {
-                if (float.TryParse(cmd.AsSpan(spaceIndex).Trim(), out float value))
-                {
-                    distanceScale = value;
-
-                    if (Set3DSettings(distanceScale, 1))
-                        PrintMessageToCurrentTab($"Setting distance scale to {value}");
-                    else
-                        PrintMessageToCurrentTab($"Error, failed to set distance scale value.");
-                }
-                else
-                {
-                    PrintMessageToCurrentTab($"Error, failed to parse value.");
-                }
-                break;
-            }
-        case "distancefalloff":
-            {
-                if (float.TryParse(cmd.AsSpan(spaceIndex).Trim(), out float value))
-                {
-                    distanceFalloff = value;
-                    PrintMessageToCurrentTab($"Setting distance falloff to {value}");
-                }
-                else
-                {
-                    PrintMessageToCurrentTab($"Error, failed to parse value.");
-                }
-                break;
-            }
-        case "maxdistance":
-            {
-                if (float.TryParse(cmd.AsSpan(spaceIndex).Trim(), out float value))
-                {
-                    maxDistance = value;
-                    PrintMessageToCurrentTab($"Setting max distance to {value}");
-                }
-                else
-                {
-                    PrintMessageToCurrentTab($"Error, failed to parse value.");
-                }
-                break;
-            }
-        case "useantennas":
-            {
-                if (bool.TryParse(cmd.AsSpan(spaceIndex).Trim(), out bool value))
-                {
-                    useAntennaConnections = value;
-                    PrintMessageToCurrentTab($"Setting use antennas to {value}");
-                }
-                else
-                {
-                    PrintMessageToCurrentTab($"Error, failed to parse value.");
-                }
-                break;
-            }
-        default:
-            PrintMessageToCurrentTab($"Invalid command {cmd}");
-            break;
-        }
-
-        return 0;
-    }
-
-    void HandleClientMoved(ulong serverConnectionHandlerID, ushort clientID, ulong oldChannelID, ulong newChannelID)
-    {
-        if (serverConnectionHandlerID != connHandlerId)
-            return;
-
-        if (clientID == localClientId)
-        {
-            currentChannelId = newChannelID;
-            Console.WriteLine($"[SE-TS Bridge] - Current channel changed. NewChannelID: {newChannelID}");
-
-            if (newChannelID != 0)
-            {
-                RefetchTSClients();
-                UpdateLocalMutingForAllClients();
-                SendLocalInfoToCurrentChannel();
-            }
-        }
-        else if (newChannelID == currentChannelId)
-        {
-            var client = GetClientByClientId(clientID);
-
-            if (client != null)
-            {
-                Console.WriteLine($"[SE-TS Bridge] - Client joined current channel but was already registered. ClientID: {clientID}, ClientName: {client.ClientName}, NewChannelID: {newChannelID}");
-            }
-            else
-            {
-                var name = GetClientName(clientID);
-                Console.WriteLine($"[SE-TS Bridge] - New client joined current channel. ClientID: {clientID}, ClientName: {name}, NewChannelID: {newChannelID}");
-                client = AddClientThreadSafe(clientID, name);
-            }
-
-            UpdateLocalMutingForClient(client);
-            SendLocalInfoToClient(client);
-        }
-        else if (oldChannelID == currentChannelId)
-        {
-            var client = GetClientByClientId(clientID);
-
-            if (client != null)
-            {
-                Console.WriteLine($"[SE-TS Bridge] - Client left current channel. ClientID: {clientID}, ClientName: {client.ClientName}, NewChannelID: {newChannelID}");
-                RemoveClientThreadSafe(client, newChannelID != 0);
-            }
-            else
-            {
-                Console.WriteLine($"[SE-TS Bridge] - Unregisterd client left current channel. ClientID: {clientID}, OldChannelID: {oldChannelID}");
-            }
-
-            if (useLocalMuting)
-                UnmuteClientLocally(serverConnectionHandlerID, clientID);
-        }
-        else
-        {
-            // A client either moved between channels that aren't the current channnel or they left the server.
-        }
-    }
-
     // Docs https://teamspeakdocs.github.io/PluginAPI/client_html/index.html
 
     #region Required functions
@@ -1419,21 +1426,17 @@ public class Plugin
 
         var connStatus = (ConnectStatus)newStatus;
 
-        if (connStatus == ConnectStatus.STATUS_CONNECTION_ESTABLISHED)
-        {
-            if (instance.GetLocalClientAndChannelID())
-            {
-                instance.RefetchTSClients();
-                instance.Set3DSettings(instance.distanceScale, 1);
-                instance.UpdateLocalMutingForAllClients();
-                instance.SendLocalInfoToCurrentChannel();
-            }
-        }
-        else if (connStatus == ConnectStatus.STATUS_DISCONNECTED)
+        if (connStatus == ConnectStatus.STATUS_DISCONNECTED)
         {
             instance.localClientId = 0;
             instance.currentChannelId = 0;
             instance.RemoveAllClients();
+        }
+        else if (connStatus == ConnectStatus.STATUS_CONNECTION_ESTABLISHED
+            && instance.GetLocalClientAndChannelID())
+        {
+            instance.Set3DSettings(instance.distanceScale, 1);
+            instance.OnLocalChannelChanged();
         }
     }
 
@@ -1563,7 +1566,7 @@ public class Plugin
         }
         else
         {
-            //Console.WriteLine($"[SE-TS Bridge] - Unregisterd client changed display name. ClientID: {clientID}");
+            //Console.WriteLine($"[SE-TS Bridge] - Unregistered client changed display name. ClientID: {clientID}");
         }
     }
 

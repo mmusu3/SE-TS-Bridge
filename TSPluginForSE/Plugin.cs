@@ -24,7 +24,7 @@ namespace TSPluginForSE;
 
 public class Plugin : IPlugin
 {
-    static PluginVersion currentVersion = new(2, 1);
+    static PluginVersion currentVersion = new(2, 2);
 
     internal class PlayerInfo
     {
@@ -44,10 +44,10 @@ public class Plugin : IPlugin
         }
     }
 
-    List<IMyPlayer> tempPlayers = new(); // Reused list
-    List<PlayerInfo> currentPlayers = new();
-    List<PlayerInfo> newPlayers = new();
-    List<PlayerInfo> removedPlayers = new();
+    List<IMyPlayer> tempPlayers = []; // Reused list
+    List<PlayerInfo> currentPlayers = [];
+    List<PlayerInfo> newPlayers = [];
+    List<PlayerInfo> removedPlayers = [];
     NamedPipeServerStream? pipeStream;
     CancellationTokenSource pipeCancellation;
     Task? connectTask;
