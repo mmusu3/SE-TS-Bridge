@@ -18,7 +18,7 @@ namespace SEPluginForTS;
 
 public class Plugin
 {
-    static PluginVersion currentVersion = new(2, 2);
+    static PluginVersion currentVersion = new(3, 0);
 
     // NOTE: Must be kept in sync with the project settings.
     static ReadOnlySpan<byte> DLLName => "SEPluginForTS"u8;
@@ -29,6 +29,8 @@ public class Plugin
     static readonly IntPtr PluginDescriptionPtr = AllocHGlobalUTF8("This plugin enables the use of TeamSpeak's positional audio feature with the game Space Engineers."u8);
     static readonly IntPtr CommandKeywordPtr = AllocHGlobalUTF8("setsbridge"u8);
 
+    static ReadOnlySpan<byte> IngameChannelTopic => "sets-ingame"u8;
+
     static Plugin instance = new();
 
     TS3Functions functions;
@@ -37,6 +39,7 @@ public class Plugin
     ulong connHandlerId;
     ushort localClientId;
     ulong currentChannelId;
+    bool inGameChannel;
 
     Vector3 listenerForward = new(0, 0, -1);
     Vector3 listenerUp = new(0, 1, 0);
@@ -45,6 +48,7 @@ public class Plugin
     float distanceScale = 0.05f;
     float distanceFalloff = 2f;
     float maxDistance = 150f;
+    float extendRangeFactor = 2f;
 
     ulong localSteamID = 0;
     bool isInGameSession;
@@ -60,6 +64,17 @@ public class Plugin
     CancellationTokenSource cancellationTokenSource = null!;
     Task runningTask = null!;
 
+    [Flags]
+    enum ClientStateFlags
+    {
+        None = 0,
+        LocallyMuted = 1,
+        InGameSession = 2,
+        HasConnection = 4,
+        ExtendRange = 8,
+        Whispering = 16
+    }
+
     class Client
     {
         public ulong ServerConnectionHandlerID;
@@ -68,10 +83,46 @@ public class Plugin
         public PluginVersion PluginVersion;
         public ulong SteamID;
         public Vector3 Position;
-        public bool IsLocallyMuted;
-        public bool InGameSession;
-        public bool HasConnection;
-        public bool IsWhispering;
+        public ClientStateFlags Flags;
+
+        public bool IsLocallyMuted
+        {
+            get => (Flags & ClientStateFlags.LocallyMuted) != 0;
+            set => SetFlag(value, ClientStateFlags.LocallyMuted);
+        }
+
+        public bool InGameSession
+        {
+            get => (Flags & ClientStateFlags.InGameSession) != 0;
+            set => SetFlag(value, ClientStateFlags.InGameSession);
+        }
+
+        public bool HasConnection
+        {
+            get => (Flags & ClientStateFlags.HasConnection) != 0;
+            set => SetFlag(value, ClientStateFlags.HasConnection);
+        }
+
+        public bool ExtendRange
+        {
+            get => (Flags & ClientStateFlags.ExtendRange) != 0;
+            set => SetFlag(value, ClientStateFlags.ExtendRange);
+        }
+
+        public bool IsWhispering
+        {
+            get => (Flags & ClientStateFlags.Whispering) != 0;
+            set => SetFlag(value, ClientStateFlags.Whispering);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        void SetFlag(bool value, ClientStateFlags flag)
+        {
+            if (value)
+                Flags |= flag;
+            else
+                Flags &= ~flag;
+        }
     }
 
     readonly List<Client> clients = [];
@@ -361,7 +412,8 @@ public class Plugin
             }
         }
 
-        SendLocalInfoToCurrentChannel();
+        if (inGameChannel)
+            SendLocalInfoToCurrentChannel();
 
         if (cancellationToken.IsCancellationRequested)
             return;
@@ -434,7 +486,7 @@ public class Plugin
 
         localSteamID = header.LocalSteamID;
 
-        if (inSessionDifferent || steamIdChanged)
+        if (inGameChannel && (inSessionDifferent || steamIdChanged))
             SendLocalInfoToCurrentChannel();
 
         if (bytes != GameUpdatePacket.Size)
@@ -467,19 +519,21 @@ public class Plugin
 
         if (gameUpdate.PlayerCount != 0)
         {
-            ProcessClientStates(memory.Span);
-            memory = memory.Slice(gameUpdate.PlayerCount * ClientGameState.Size);
+            int numBytes = gameUpdate.PlayerCount * ClientGameState.Size;
+            ProcessClientStates(gameUpdate.PlayerCount, memory.Span.Slice(0, numBytes));
+            memory = memory.Slice(numBytes);
         }
 
         if (gameUpdate.RemovedPlayerCount != 0)
         {
-            ProcessRemovedPlayers(gameUpdate.RemovedPlayerCount, memory.Span);
-            memory = memory.Slice(gameUpdate.RemovedPlayerCount * sizeof(ulong));
+            int numBytes = gameUpdate.RemovedPlayerCount * sizeof(ulong);
+            ProcessRemovedPlayers(gameUpdate.RemovedPlayerCount, memory.Span.Slice(0, numBytes));
+            memory = memory.Slice(numBytes);
         }
 
         if (gameUpdate.NewPlayerCount != 0)
         {
-            ProcessNewPlayers(gameUpdate.NewPlayerCount, memory.Span);
+            ProcessNewPlayers(gameUpdate.NewPlayerCount, memory.Span.Slice(0, gameUpdate.NewPlayerByteLength));
             memory = memory.Slice(gameUpdate.NewPlayerByteLength);
 
             if (memory.Length != 0)
@@ -538,21 +592,28 @@ public class Plugin
         }
     }
 
-    void ProcessClientStates(ReadOnlySpan<byte> bytes)
+    void ProcessClientStates(int numPlayers, ReadOnlySpan<byte> bytes)
     {
-        var states = MemoryMarshal.Cast<byte, ClientGameState>(bytes);
+        var numStates = bytes.Length / ClientGameState.Size;
+
+        if (numStates < numPlayers)
+        {
+            Console.WriteLine($"[SE-TS Bridge] - Error processing client states. Expected {numPlayers} states but only had {numStates}.");
+            return;
+        }
 
         //Console.WriteLine($"[SE-TS Bridge] - Processing {states.Length} client states.");
 
-        for (int i = 0; i < states.Length; i++)
+        for (int i = 0; i < numPlayers; i++)
         {
-            var state = states[i];
+            var state = MemoryMarshal.Read<ClientGameState>(bytes.Slice(i * ClientGameState.Size));
             var client = GetClientBySteamId(state.SteamID);
 
             if (client != null)
             {
                 client.Position = state.Position;
-                client.HasConnection = state.HasConnection;
+                client.HasConnection = (state.Flags & PlayerStateFlags.HasConnection) != 0;
+                client.ExtendRange = (state.Flags & PlayerStateFlags.InCockpit) != 0;
 
                 if (localClientId != 0)
                     UpdateClientPosition(client);
@@ -602,7 +663,7 @@ public class Plugin
             bytes = bytes.Slice(nameLength * sizeof(char));
 
             var pos = Read<Vector3>(ref bytes);
-            bool hasConnection = Read<bool>(ref bytes);
+            var flags = (PlayerStateFlags)Read<int>(ref bytes);
             var client = GetClientBySteamId(id);
 
             if (client != null)
@@ -610,9 +671,10 @@ public class Plugin
                 DebugConsole($"[SE-TS Bridge] - Matching client found for player SteamID: {id}, SteamName: {name}, ClientID: {client.ClientID}");
                 ReleaseConsole($"[SE-TS Bridge] - Matching client found for player SteamID. SteamName: {name}, ClientID: {client.ClientID}");
 
-                client.InGameSession = true;
                 client.Position = pos;
-                client.HasConnection = hasConnection;
+                client.InGameSession = true;
+                client.HasConnection = (flags & PlayerStateFlags.HasConnection) != 0;
+                client.ExtendRange = (flags & PlayerStateFlags.InCockpit) != 0;
 
                 UpdateLocalMutingForClient(client);
             }
@@ -730,7 +792,7 @@ public class Plugin
 
     void UpdateClientPosition(Client client)
     {
-        bool noPosition = client.IsWhispering && (client.HasConnection || !useAntennaConnections);
+        bool noPosition = !inGameChannel || (client.IsWhispering && (client.HasConnection || !useAntennaConnections));
 
         SetClientPos(client.ClientID, noPosition ? default : client.Position);
     }
@@ -815,7 +877,7 @@ public class Plugin
 
         CheckClientLocalMuting(client);
 
-        if (isInGameSession != client.InGameSession)
+        if (inGameChannel && (isInGameSession != client.InGameSession))
         {
             if (!client.IsLocallyMuted)
             {
@@ -1107,7 +1169,9 @@ public class Plugin
             }
 
             UpdateLocalMutingForClient(client);
-            SendLocalInfoToClient(client);
+
+            if (inGameChannel)
+                SendLocalInfoToClient(client);
         }
         else if (oldChannelID == currentChannelId)
         {
@@ -1132,11 +1196,106 @@ public class Plugin
         }
     }
 
-    void OnLocalChannelChanged()
+    unsafe void OnLocalChannelChanged()
     {
         RefetchTSClients();
+
+        inGameChannel = false;
+
+        byte* strPtr;
+        var err = (Ts3ErrorType)functions.getChannelVariableAsString(connHandlerId, currentChannelId, ChannelProperties.CHANNEL_TOPIC, &strPtr);
+
+        if (err == Ts3ErrorType.ERROR_ok)
+        {
+            var str = MemoryMarshal.CreateReadOnlySpanFromNullTerminated(strPtr);
+
+            if (str.SequenceEqual(IngameChannelTopic))
+                inGameChannel = true;
+
+            functions.freeMemory(strPtr);
+        }
+        else
+        {
+            Console.WriteLine($"[SE-TS Bridge] - Failed to get channel topic. Error: {err}");
+        }
+
         UpdateLocalMutingForAllClients();
-        SendLocalInfoToCurrentChannel();
+
+        if (inGameChannel)
+            SendLocalInfoToCurrentChannel();
+    }
+
+    void CalculateClientVolume(ushort clientID, ref float volume)
+    {
+        var client = GetClientByClientId(clientID);
+
+        if (client == null)
+            return;
+
+        // TODO: Scale volume down when client is facing away
+
+        float minD = minDistance;
+        float maxDist = maxDistance;
+        float scale = distanceScale;
+        float falloff = distanceFalloff;
+
+        if (client.ExtendRange)
+        {
+            maxDist *= extendRangeFactor;
+            falloff /= extendRangeFactor;
+        }
+
+        float dist = Vector3.Distance(default, client.Position);
+        float vol = float.Min(1f, 1f / float.Pow(dist * scale + 1 - minD * scale, (float)falloff));
+
+        float limit = dist / maxDist;
+        limit = 1 - limit * limit;
+
+        vol *= limit;
+        vol = float.Max(0, vol);
+
+        volume = vol;
+    }
+
+    unsafe void OnChannelEdited(ulong serverConnectionHandlerID, ulong channelID, ushort invokerID, byte* invokerName, byte* invokerUniqueIdentifier)
+    {
+        if (serverConnectionHandlerID != connHandlerId)
+            return;
+
+        if (channelID != currentChannelId)
+            return;
+
+        byte* strPtr;
+        var err = (Ts3ErrorType)functions.getChannelVariableAsString(serverConnectionHandlerID, channelID, ChannelProperties.CHANNEL_TOPIC, &strPtr);
+
+        if (err != Ts3ErrorType.ERROR_ok)
+        {
+            Console.WriteLine($"[SE-TS Bridge] - Failed to get channel topic. Error: {err}");
+            return;
+        }
+
+        var str = MemoryMarshal.CreateReadOnlySpanFromNullTerminated(strPtr);
+        bool isIngame = str.SequenceEqual(IngameChannelTopic);
+
+        functions.freeMemory(strPtr);
+
+        if (isIngame)
+        {
+            if (!inGameChannel)
+            {
+                inGameChannel = true;
+                SendLocalInfoToCurrentChannel();
+                UpdateLocalMutingForAllClients();
+            }
+        }
+        else
+        {
+            if (inGameChannel)
+            {
+                inGameChannel = false;
+                UpdateLocalMutingForAllClients();
+            }
+        }
     }
 
     #region Wrapper Methods
@@ -1503,25 +1662,7 @@ public class Plugin
         if (serverConnectionHandlerID != instance.connHandlerId)
             return;
 
-        var client = instance.GetClientByClientId(clientID);
-
-        if (client == null)
-            return;
-
-        // TODO: Scale volume down when client is facing away
-
-        float minD = instance.minDistance;
-        float scale = instance.distanceScale;
-        float dist = Vector3.Distance(default, client.Position);
-        float vol = float.Min(1f, 1f / float.Pow(dist * scale + 1 - minD * scale, instance.distanceFalloff));
-
-        float limit = dist / instance.maxDistance;
-        limit = 1 - limit * limit;
-
-        vol *= limit;
-        vol = float.Max(0, vol);
-
-        *volume = vol;
+        instance.CalculateClientVolume(clientID, ref *volume);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onPluginCommandEvent")]
@@ -1551,7 +1692,7 @@ public class Plugin
 
         var cmd = MemoryMarshal.CreateReadOnlySpanFromNullTerminated(pluginCommand);
 
-        if (cmd != null)
+        if (cmd.Length != 0)
             instance.HandlePluginCommandEvent(nameUtf8, cmd, client);
     }
 
@@ -1575,6 +1716,12 @@ public class Plugin
         {
             //Console.WriteLine($"[SE-TS Bridge] - Unregistered client changed display name. ClientID: {clientID}");
         }
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onUpdateChannelEditedEvent")]
+    public unsafe static void ts3plugin_onUpdateChannelEditedEvent(ulong serverConnectionHandlerID, ulong channelID, ushort invokerID, /*const */byte* invokerName, /*const */byte* invokerUniqueIdentifier)
+    {
+        instance.OnChannelEdited(serverConnectionHandlerID, channelID, invokerID, invokerName, invokerUniqueIdentifier);
     }
 
 #pragma warning restore IDE1006 // Naming Styles

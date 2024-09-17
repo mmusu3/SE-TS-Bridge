@@ -1,4 +1,5 @@
-﻿#if TS_PLUGIN
+﻿using System;
+#if TS_PLUGIN
 using System.Numerics;
 #elif SE_PLUGIN
 using VRageMath;
@@ -30,11 +31,22 @@ struct GameUpdatePacket
     public unsafe static readonly int Size = sizeof(GameUpdatePacket);
 }
 
+[Flags]
+enum PlayerStateFlags
+{
+    None = 0,
+    HasConnection = 1,
+    InCockpit = 2,
+#if BI_DIRECTIONAL
+    Whispering = 4
+#endif
+}
+
 struct ClientGameState
 {
     public ulong SteamID;
     public Vector3 Position;
-    public bool HasConnection;
+    public PlayerStateFlags Flags;
 
     public unsafe static readonly int Size = sizeof(ClientGameState);
 }

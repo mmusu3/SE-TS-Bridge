@@ -11,7 +11,10 @@ Inside there are two plugins. One for Space Engineers (SE) and one for TeamSpeak
 Each one is different and will only work for the specified program so make sure not to mix them up.  
 
 #### Space Engineers Plugin
-* Since SE version `1.203.022` using plugins now requires the PluginLoader launcher. Visit https://github.com/sepluginloader/SpaceEngineersLauncher for downloads and installation instructions.  
+* Plugins in SE versions from `1.203.022` onwards require the use of a third party launcher exe.
+You must have one in order to use plugins.
+The SE community has developed such a launcher which can be found here: https://github.com/sepluginloader/SpaceEngineersLauncher
+Downloads and installation instructions for the launcher can be found through that link.  
 * Once you have the launcher installed you can add the plugin file for SE-TS Bridge.
 * First you may need to unblock the `TSPluginForSE.dll` file in order for it to work. To do so, right click the file and click Properties. At the bottom of the menu if you see a Security section with a checkbox that says Unblock, check it and press the OK button.  
 * Next you need to locate your Space Engineers install directory. The easiest way to do so is to first open the game properties menu for Space Engineers in Steam. Then in the `Local Files` tab click the `Browse` button. This will take you to straight to the install folder.  
@@ -30,6 +33,11 @@ Each one is different and will only work for the specified program so make sure 
 * To enable positional audio support go to TeamSpeak Options->Playback and ensure the `Always set clients 3D positions when available` checkbox is ticked.  
 
 When updating either plugin, first close the respective application before re-copying the plugin files.  
+
+#### Usage
+To enable the positional audio features the plugin requires that a TeamSpeak channel be designated as an in-game channel.
+This is done by setting the channel topic text to `sets-ingame` The text must match exactly, no extra spaces.  
+Any channel not designated as in-game will function as normal like without the plugin.
 
 ##### Commands
 The Teamspeak plugin has a couple of chat based commands to control the audio settings.

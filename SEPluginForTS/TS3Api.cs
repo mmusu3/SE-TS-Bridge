@@ -125,7 +125,7 @@ public unsafe struct TS3Functions
     /* Channel info */
     public uint getChannelVariableAsInt(ulong serverConnectionHandlerID, ulong channelID, nint flag, int* result) => ((delegate*<ulong, ulong, nint, int*, uint>)pointers[84])(serverConnectionHandlerID, channelID, flag, result);
     public uint getChannelVariableAsulong(ulong serverConnectionHandlerID, ulong channelID, nint flag, ulong* result) => ((delegate*<ulong, ulong, nint, ulong*, uint>)pointers[85])(serverConnectionHandlerID, channelID, flag, result);
-    public uint getChannelVariableAsString(ulong serverConnectionHandlerID, ulong channelID, nint flag, byte** result) => ((delegate*<ulong, ulong, nint, byte**, uint>)pointers[86])(serverConnectionHandlerID, channelID, flag, result);
+    public uint getChannelVariableAsString(ulong serverConnectionHandlerID, ulong channelID, ChannelProperties flag, byte** result) => ((delegate*<ulong, ulong, nint, byte**, uint>)pointers[86])(serverConnectionHandlerID, channelID, (nint)flag, result);
     public uint getChannelIDFromChannelNames(ulong serverConnectionHandlerID, byte** channelNameArray, ulong* result) => ((delegate*<ulong, byte**, ulong*, uint>)pointers[87])(serverConnectionHandlerID, channelNameArray, result);
     public uint setChannelVariableAsInt(ulong serverConnectionHandlerID, ulong channelID, nint flag, int value) => ((delegate*<ulong, ulong, nint, int, uint>)pointers[88])(serverConnectionHandlerID, channelID, flag, value);
     public uint setChannelVariableAsulong(ulong serverConnectionHandlerID, ulong channelID, nint flag, ulong value) => ((delegate*<ulong, ulong, nint, ulong, uint>)pointers[89])(serverConnectionHandlerID, channelID, flag, value);
@@ -360,7 +360,7 @@ enum TalkStatus
     STATUS_TALKING_WHILE_DISABLED = 2,
 }
 
-enum ChannelProperties
+public enum ChannelProperties
 {
     /// <summary>String.  Read/Write. Name of the channel. Always available.</summary>
     CHANNEL_NAME = 0,

@@ -24,7 +24,7 @@ namespace TSPluginForSE;
 
 public class Plugin : IPlugin
 {
-    static PluginVersion currentVersion = new(2, 2);
+    static PluginVersion currentVersion = new(3, 0);
 
     internal class PlayerInfo
     {
@@ -32,7 +32,26 @@ public class Plugin : IPlugin
         public ulong SteamID;
         public string DisplayName;
         public Vector3D Position;
-        public bool HasConnection;
+        public PlayerStateFlags Flags;
+
+        public bool HasConnection
+        {
+            get => (Flags & PlayerStateFlags.HasConnection) != 0;
+            set => SetFlag(value, PlayerStateFlags.HasConnection);
+        }
+
+        public bool InCockpit
+        {
+            get => (Flags & PlayerStateFlags.InCockpit) != 0;
+            set => SetFlag(value, PlayerStateFlags.InCockpit);
+        }
+#if BI_DIRECTIONAL
+        public bool IsWhispering
+        {
+            get => (Flags & PlayerStateFlags.Whispering) != 0;
+            set => SetFlag(value, PlayerStateFlags.Whispering);
+        }
+#endif
 
         public PlayerInfo(IMyPlayer? internalPlayer, ulong steamID, string displayName, Vector3D position)
         {
@@ -41,6 +60,15 @@ public class Plugin : IPlugin
             DisplayName = displayName;
             Position = position;
             HasConnection = true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        void SetFlag(bool value, PlayerStateFlags flag)
+        {
+            if (value)
+                Flags |= flag;
+            else
+                Flags &= ~flag;
         }
     }
 
@@ -322,7 +350,7 @@ public class Plugin : IPlugin
                 newPlayersByteLength += sizeof(int);
                 newPlayersByteLength += item.DisplayName.Length * sizeof(char);
                 newPlayersByteLength += sizeof(float) * 3; // sizeof(Vector3);
-                newPlayersByteLength += sizeof(bool);
+                newPlayersByteLength += sizeof(int);
             }
         }
 
@@ -363,15 +391,23 @@ public class Plugin : IPlugin
                 var p = item.InternalPlayer;
 
                 Vector3 pos;
+                bool inCockpit = false;
 
                 if (p != null)
                 {
                     var c = p.Character;
 
                     if (c != null)
+                    {
                         pos = c.GetPosition() + Vector3.Transform(mouthOffset, c.WorldMatrix.GetOrientation());
+
+                        if (c.Parent is IMyShipController cockpit)
+                            inCockpit = cockpit.CanControlShip;
+                    }
                     else
+                    {
                         pos = p.GetPosition();
+                    }
 
                     item.Position = pos;
                 }
@@ -380,13 +416,23 @@ public class Plugin : IPlugin
                     pos = item.Position;
                 }
 
+                item.InCockpit = inCockpit;
+
                 var relPos = (Vector3)(pos - localPos);
                 relPos = Vector3.Transform(relPos, inverseLocalOrient);
+
+                PlayerStateFlags flags = 0;
+
+                if (item.HasConnection)
+                    flags |= PlayerStateFlags.HasConnection;
+
+                if (item.InCockpit)
+                    flags |= PlayerStateFlags.InCockpit;
 
                 var state = new ClientGameState {
                     SteamID = item.SteamID,
                     Position = relPos,
-                    HasConnection = item.HasConnection
+                    Flags = flags
                 };
 
                 Write(ref span, state);
@@ -419,8 +465,16 @@ public class Plugin : IPlugin
                 var relPos = (Vector3)(item.Position - localPos);
                 relPos = Vector3.Transform(relPos, inverseLocalOrient);
 
+                PlayerStateFlags flags = 0;
+
+                if (item.HasConnection)
+                    flags |= PlayerStateFlags.HasConnection;
+
+                if (item.InCockpit)
+                    flags |= PlayerStateFlags.InCockpit;
+
                 Write(ref span, relPos);
-                Write(ref span, item.HasConnection);
+                Write(ref span, (int)flags);
 
                 currentPlayers.Add(item);
             }
@@ -468,13 +522,21 @@ public class Plugin : IPlugin
             var c = item.Character;
 
             Vector3D pos;
+            bool inCockpit = false;
 
             if (c != null)
+            {
                 pos = c.GetPosition() + Vector3.Transform(mouthOffset, c.WorldMatrix.GetOrientation());
-            else
-                pos = item.GetPosition();
 
-            newPlayers.Add(new PlayerInfo(item, item.SteamUserId, item.DisplayName, pos));
+                if (c.Parent is IMyShipController cockpit)
+                    inCockpit = cockpit.CanControlShip;
+            }
+            else
+            {
+                pos = item.GetPosition();
+            }
+
+            newPlayers.Add(new PlayerInfo(item, item.SteamUserId, item.DisplayName, pos) { InCockpit = inCockpit });
         }
 
         tempPlayers.Clear();
