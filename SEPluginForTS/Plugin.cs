@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.IO.Pipes;
+using System.Linq;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -29,17 +30,15 @@ public class Plugin
     static readonly IntPtr PluginDescriptionPtr = AllocHGlobalUTF8("This plugin enables the use of TeamSpeak's positional audio feature with the game Space Engineers."u8);
     static readonly IntPtr CommandKeywordPtr = AllocHGlobalUTF8("setsbridge"u8);
 
-    static ReadOnlySpan<byte> IngameChannelTopic => "sets-ingame"u8;
-
     static Plugin instance = new();
 
     TS3Functions functions;
     unsafe byte* pluginID = null;
 
-    ulong connHandlerId;
+    ulong currentServerId;
     ushort localClientId;
-    ulong currentChannelId;
-    bool inGameChannel;
+    Dictionary<ulong, Channel> serverChannels = [];
+    Channel? currentChannel;
 
     Vector3 listenerForward = new(0, 0, -1);
     Vector3 listenerUp = new(0, 1, 0);
@@ -52,6 +51,7 @@ public class Plugin
 
     ulong localSteamID = 0;
     bool isInGameSession;
+    bool forceIngame = false;
 
     bool useAntennaConnections = true;
 
@@ -62,6 +62,57 @@ public class Plugin
     NamedPipeClientStream? pipeStream;
     CancellationTokenSource cancellationTokenSource = null!;
     Task runningTask = null!;
+
+    class Channel
+    {
+        public required ulong ServerID;
+        public required ulong ID;
+        public required string Name = null!;
+
+        public string? Topic => topic;
+        string? topic;
+
+        public Channel? Parent;
+        public List<Channel> Children = [];
+        public bool IsSubscribed;
+        public int ClientCount;
+        public bool IsIngame;
+
+        public void SetTopic(string? topic)
+        {
+            this.topic = topic;
+            IsIngame = topic == "sets-ingame";
+        }
+
+        public IEnumerable<Channel> Descendants
+        {
+            get
+            {
+                foreach (var child in Children)
+                {
+                    yield return child;
+
+                    foreach (var item in child.Descendants)
+                        yield return item;
+                }
+            }
+        }
+
+        public bool HasAncestor(Channel channel)
+        {
+            var p = Parent;
+
+            while (p != null)
+            {
+                if (p == channel)
+                    return true;
+
+                p = p.Parent;
+            }
+
+            return false;
+        }
+    }
 
     [Flags]
     enum ClientStateFlags
@@ -76,13 +127,15 @@ public class Plugin
 
     class Client
     {
-        public ulong ServerConnectionHandlerID;
         public ushort ClientID;
         public string? ClientName;
+        public Channel? Channel;
         public PluginVersion PluginVersion;
         public ulong SteamID;
         public Vector3 Position;
         public ClientStateFlags Flags;
+
+        public ulong ServerID => Channel?.ServerID ?? 0;
 
         public bool IsLocallyMuted
         {
@@ -168,15 +221,18 @@ public class Plugin
     {
         AddOrPrintConsoleMessage("[SE-TS Bridge] - Initializing.");
 
-        connHandlerId = functions.getCurrentServerConnectionHandlerID();
+        currentServerId = functions.getCurrentServerConnectionHandlerID();
 
         int connectionStatus = 0;
-        var err = (Ts3ErrorType)functions.getConnectionStatus(connHandlerId, &connectionStatus);
+        var err = (Ts3ErrorType)functions.getConnectionStatus(currentServerId, &connectionStatus);
 
-        if (err == Ts3ErrorType.ERROR_ok && connectionStatus == 1 && GetLocalClientAndChannelID())
+        if (err == Ts3ErrorType.ERROR_ok && connectionStatus == 1 && UpdateLocalClientIdAndChannel(currentServerId))
         {
-            RefetchTSClients();
             Set3DSettings(distanceScale, 1);
+            RefetchTSClients();
+
+            if (instance.currentChannel is { IsIngame: true })
+                instance.SendLocalInfoToCurrentChannel();
         }
 
         LoadSettingsFile();
@@ -256,9 +312,12 @@ public class Plugin
             clients.Clear();
         }
 
-        connHandlerId = 0;
+        lock (serverChannels)
+            serverChannels.Clear();
+
+        currentServerId = 0;
         localClientId = 0;
-        currentChannelId = 0;
+        currentChannel = null;
 
         Console.WriteLine("[SE-TS Bridge] - Disposed.");
     }
@@ -409,7 +468,7 @@ public class Plugin
             }
         }
 
-        if (inGameChannel)
+        if (currentChannel is { IsIngame: true })
             SendLocalInfoToCurrentChannel();
 
         if (cancellationToken.IsCancellationRequested)
@@ -478,7 +537,7 @@ public class Plugin
 
         localSteamID = header.LocalSteamID;
 
-        if (inGameChannel && (inSessionDifferent || steamIdChanged))
+        if (currentChannel is { IsIngame: true } && (inSessionDifferent || steamIdChanged))
             SendLocalInfoToCurrentChannel();
 
         if (bytes != GameUpdatePacket.Size)
@@ -540,47 +599,76 @@ public class Plugin
         return (UpdateResult.OK, null);
     }
 
+    bool WriteLocalInfoCommand(Span<byte> commandBuffer)
+    {
+        int bytesWritten;
+        bool formatSuccess = Utf8.TryWrite(commandBuffer[0..^1], $"TSSE[{currentVersion.Packed}],GameInfo:{localSteamID}:{((isInGameSession || forceIngame) ? 1 : 0)}", out bytesWritten);
+
+        if (!formatSuccess)
+        {
+            Console.WriteLine("[SE-TS Bridge] - Failed to format GameInfo command, insufficient buffer size.");
+            return false;
+        }
+
+        commandBuffer[bytesWritten] = 0;
+        return true;
+    }
+
+    bool WriteLegacyLocalInfoCommand(Span<byte> commandBuffer)
+    {
+        int bytesWritten;
+        bool formatSuccess = Utf8.TryWrite(commandBuffer[0..^1], $"TSSE,SteamId:{localSteamID}", out bytesWritten);
+
+        if (!formatSuccess)
+        {
+            Console.WriteLine("[SE-TS Bridge] - Failed to format GameInfo command, insufficient buffer size.");
+            return false;
+        }
+
+        commandBuffer[bytesWritten] = 0;
+        return true;
+    }
+
     void SendLocalInfoToCurrentChannel()
     {
         //Console.WriteLine("[SE-TS Bridge] - SendLocalInfoToCurrentChannel()");
-        SendLocalInfoToClientOrChannel(null);
+        SendLocalInfoToClientOrCurrentChannel(null);
     }
 
     void SendLocalInfoToClient(Client client)
     {
         //Console.WriteLine($"[SE-TS Bridge] - SendLocalInfoToClient({client.ClientID})");
-        SendLocalInfoToClientOrChannel(client);
+        SendLocalInfoToClientOrCurrentChannel(client);
     }
 
-    unsafe void SendLocalInfoToClientOrChannel(Client? client)
+    unsafe void SendLocalInfoToClientOrCurrentChannel(Client? client)
     {
-        byte* commandBuffer = stackalloc byte[64];
-        var cbSpan = new Span<byte>(commandBuffer, 63);
-
-        bool formatSuccess;
-        int bytesWritten;
+        const int commandBufferSize = 64;
+        byte* commandBuffer = stackalloc byte[commandBufferSize];
+        var cbSpan = new Span<byte>(commandBuffer, commandBufferSize);
 
         if (client == null || client.PluginVersion.Packed == 0 || client.PluginVersion > new PluginVersion(1, 2))
-            formatSuccess = Utf8.TryWrite(cbSpan, $"TSSE[{currentVersion.Packed}],GameInfo:{localSteamID}:{(isInGameSession ? 1 : 0)}", out bytesWritten);
+        {
+            WriteLocalInfoCommand(cbSpan);
+        }
         else if (localSteamID != 0)
-            formatSuccess = Utf8.TryWrite(cbSpan, $"TSSE,SteamId:{localSteamID}", out bytesWritten);
+        {
+            WriteLegacyLocalInfoCommand(cbSpan);
+        }
         else
+        {
             return;
-
-        commandBuffer[bytesWritten] = 0;
-
-        if (!formatSuccess)
-            Console.WriteLine("[SE-TS Bridge] - Failed to format GameInfo command, insufficient buffer size.");
+        }
 
         if (client != null)
         {
             uint clientIdAndTerm = client.ClientID; // Upper 16 bits is zero terminator
 
-            functions.sendPluginCommand(connHandlerId, pluginID, commandBuffer, PluginTargetMode.PluginCommandTarget_CLIENT, (ushort*)&clientIdAndTerm, null);
+            functions.sendPluginCommand(client.ServerID, pluginID, commandBuffer, PluginTargetMode.PluginCommandTarget_CLIENT, (ushort*)&clientIdAndTerm, null);
         }
         else
         {
-            functions.sendPluginCommand(connHandlerId, pluginID, commandBuffer, PluginTargetMode.PluginCommandTarget_CURRENT_CHANNEL, null, null);
+            functions.sendPluginCommand(currentServerId, pluginID, commandBuffer, PluginTargetMode.PluginCommandTarget_CURRENT_CHANNEL, null, null);
         }
     }
 
@@ -682,6 +770,12 @@ public class Plugin
         return value;
     }
 
+    unsafe static void Write<T>(ref Span<byte> span, in T value) where T : unmanaged
+    {
+        MemoryMarshal.Write(span, in value);
+        span = span.Slice(sizeof(T));
+    }
+
     Client? GetClientByClientId(ushort id)
     {
         lock (clients)
@@ -710,21 +804,23 @@ public class Plugin
         return null;
     }
 
-    Client AddClientThreadSafe(ushort id, string? name)
+    Client AddClientThreadSafe(ushort id, Channel channel, string? name)
     {
         lock (clients)
-            return AddClient(id, name);
+            return AddClient(id, channel, name);
     }
 
-    Client AddClient(ushort id, string? name)
+    Client AddClient(ushort id, Channel channel, string? name)
     {
         var client = new Client {
-            ServerConnectionHandlerID = connHandlerId,
             ClientID = id,
-            ClientName = name
+            ClientName = name,
+            Channel = channel
         };
 
         clients.Add(client);
+
+        channel.ClientCount++;
 
         return client;
     }
@@ -739,6 +835,9 @@ public class Plugin
     {
         if (resetPos)
             SetClientPos(client.ClientID, default);
+
+        if (client.Channel != null)
+            client.Channel.ClientCount--;
 
         bool removed = clients.Remove(client);
 
@@ -758,30 +857,20 @@ public class Plugin
 
             Console.WriteLine($"[SE-TS Bridge] - Removing all {clients.Count} clients.");
 
+            foreach (var client in clients)
+            {
+                if (client.Channel != null)
+                    client.Channel.ClientCount--;
+            }
+
             clients.Clear();
             // TODO: Does this need to SetClientPos?
         }
     }
 
-    void SetClientIsWhispering(ushort clientId, bool isWhispering)
-    {
-        var client = GetClientByClientId(clientId);
-
-        if (client == null)
-            return;
-
-        //Console.WriteLine($"[SE-TS Bridge] - Setting client {clientId} whispering state to {isWhispering}");
-
-        if (isWhispering != client.IsWhispering)
-        {
-            client.IsWhispering = isWhispering;
-            UpdateClientPosition(client);
-        }
-    }
-
     void UpdateClientPosition(Client client)
     {
-        bool noPosition = !inGameChannel || (client.IsWhispering && (client.HasConnection || !useAntennaConnections));
+        bool noPosition = currentChannel is not { IsIngame: true } || (client.IsWhispering && (client.HasConnection || !useAntennaConnections));
 
         SetClientPos(client.ClientID, noPosition ? default : client.Position);
     }
@@ -795,56 +884,71 @@ public class Plugin
         }
     }
 
-    unsafe void RefetchTSClients()
+    void RefetchTSClients()
     {
         Console.WriteLine("[SE-TS Bridge] - Refetching client list.");
 
-        ushort* clientList;
-        var err = (Ts3ErrorType)functions.getChannelClientList(connHandlerId, currentChannelId, &clientList);
+        RemoveAllClients();
 
-        if (err != Ts3ErrorType.ERROR_ok)
+        if (currentChannel == null)
         {
-            Console.WriteLine($"[SE-TS Bridge] - Failed to get client list. Error: {err}");
+            Console.WriteLine("[SE-TS Bridge] - Failed to refetch client list. Current channel is null.");
             return;
         }
 
-        RemoveAllClients();
+        lock (serverChannels)
+        {
+            foreach (var channel in serverChannels.Values)
+            {
+                if (channel.IsSubscribed)
+                    AddClientsFromChannel(channel);
+            }
+        }
+
+        Console.WriteLine($"[SE-TS Bridge] - There are {clients.Count} registered clients.");
+    }
+
+    unsafe void AddClientsFromChannel(Channel channel)
+    {
+        Console.WriteLine($"[SE-TS Bridge] - Adding clients from channel {channel.ID}.");
+
+        ushort* clientList;
+        var err = (Ts3ErrorType)functions.getChannelClientList(channel.ServerID, channel.ID, &clientList);
+
+        if (err != Ts3ErrorType.ERROR_ok)
+        {
+            Console.WriteLine($"[SE-TS Bridge] - Failed to get client list for channel {channel.ID}. Error: {err}");
+            return;
+        }
 
         int numAdded = 0;
-        int numClients;
 
         lock (clients)
         {
-            int i = 0;
             ushort id;
 
-            while ((id = clientList[i++]) != 0)
+            for (int i = 0; (id = clientList[i]) != 0; i++)
             {
                 if (id == localClientId)
                     continue;
 
-                var name = GetClientName(id);
+                var name = GetClientName(channel.ServerID, id);
+                var client = AddClient(id, channel, name);
 
-                GetLocalMuteStateForClient(connHandlerId, id, out bool muted);
-
-                var client = AddClient(id, name);
+                GetLocalMuteStateForClient(channel.ServerID, id, out bool muted);
                 client.IsLocallyMuted = muted;
 
                 numAdded++;
             }
-
-            numClients = clients.Count;
         }
-
-        if (numAdded != 0)
-            Console.WriteLine($"[SE-TS Bridge] - Added {numAdded} clients.");
-
-        Console.WriteLine($"[SE-TS Bridge] - There are {numClients} total clients.");
 
         err = (Ts3ErrorType)functions.freeMemory(clientList);
 
         if (err != Ts3ErrorType.ERROR_ok)
-            Console.WriteLine($"[SE-TS Bridge] - Failed to free client list. Error: {err}");
+            Console.WriteLine($"[SE-TS Bridge] - Failed to free client list pointer. Error: {err}");
+
+        if (numAdded != 0)
+            Console.WriteLine($"[SE-TS Bridge] - Added {numAdded} clients.");
     }
 
     void HandlePluginCommandEvent(ReadOnlySpan<byte> pluginName, ReadOnlySpan<byte> cmd, Client invokerClient)
@@ -983,7 +1087,22 @@ public class Plugin
 
         if (spaceIndex < 0)
         {
-            PrintMessageToCurrentTab($"Invalid command {cmd}");
+            switch (cmd.ToLowerInvariant())
+            {
+#if DEBUG
+            case "toggleforceingame":
+                {
+                    forceIngame = !forceIngame;
+                    PrintMessageToCurrentTab($"Setting force ingame status to {forceIngame}");
+                    SendLocalInfoToCurrentChannel();
+                    break;
+                }
+#endif
+            default:
+                PrintMessageToCurrentTab($"Invalid command {cmd}");
+                break;
+            }
+
             return 0;
         }
 
@@ -1049,89 +1168,361 @@ public class Plugin
         }
     }
 
-    void HandleClientMoved(ulong serverConnectionHandlerID, ushort clientID, ulong oldChannelID, ulong newChannelID)
+    [MemberNotNullWhen(true, nameof(currentChannel))]
+    bool UpdateLocalClientIdAndChannel(ulong serverId)
     {
-        if (serverConnectionHandlerID != connHandlerId)
+        if (!GetLocalClientAndChannelIds(serverId, out localClientId, out ulong channelId))
+            return false;
+
+        lock (serverChannels)
+        {
+            if (!serverChannels.TryGetValue(channelId, out currentChannel))
+            {
+                Console.WriteLine($"[SE-TS Bridge] - Failed to find current channel with ID {channelId}.");
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    void OnServerDisconnected()
+    {
+        localClientId = 0;
+        RemoveAllClients();
+        currentChannel = null;
+
+        lock (serverChannels)
+            serverChannels.Clear();
+    }
+
+    void OnNewChannel(ulong serverId, ulong channelId, ulong channelParentId)
+    {
+        if (serverId != currentServerId)
             return;
 
-        if (clientID == localClientId)
-        {
-            currentChannelId = newChannelID;
-            Console.WriteLine($"[SE-TS Bridge] - Current channel changed. NewChannelID: {newChannelID}");
+        lock (serverChannels)
+            RegisterChannel(serverId, channelId, channelParentId);
+    }
 
-            if (newChannelID != 0)
-                OnLocalChannelChanged();
-        }
-        else if (newChannelID == currentChannelId)
-        {
-            var client = GetClientByClientId(clientID);
+    unsafe void OnNewChannelCreated(ulong serverId, ulong channelId, ulong channelParentId,
+        ushort invokerId, byte* invokerName, byte* invokerUniqueIdentifier)
+    {
+        if (serverId != currentServerId)
+            return;
 
-            if (client != null)
+        lock (serverChannels)
+            RegisterChannel(serverId, channelId, channelParentId);
+    }
+
+    Channel? RegisterChannel(ulong serverId, ulong channelId, ulong channelParentId)
+    {
+        string? name;
+
+        if (!GetChannelName(serverId, channelId, out name))
+            return null;
+
+        string? topic;
+
+        if (!GetChannelTopic(serverId, channelId, out topic))
+            return null;
+
+        if (GetChannelIsSubscribed(serverId, channelId) is not { } isSubscribed)
+            return null;
+
+        Channel? parent = null;
+
+        if (channelParentId != 0 && !serverChannels.TryGetValue(channelParentId, out parent))
+            Console.WriteLine($"[SE-TS Bridge] - Failed to find parent channel {channelParentId}.");
+
+        var channel = new Channel {
+            ServerID = serverId,
+            ID = channelId,
+            Name = name,
+            Parent = parent,
+            IsSubscribed = isSubscribed
+        };
+
+        channel.SetTopic(topic);
+
+        serverChannels.Add(channelId, channel);
+        parent?.Children.Add(channel);
+
+        return channel;
+    }
+
+    unsafe void OnChannelDeleted(ulong serverId, ulong channelId,
+        ushort invokerId, byte* invokerName, byte* invokerUniqueIdentifier)
+    {
+        if (serverId != currentServerId)
+            return;
+
+        lock (serverChannels)
+        {
+            if (!serverChannels.Remove(channelId, out var channel))
             {
-                Console.WriteLine($"[SE-TS Bridge] - Client joined current channel but was already registered. ClientID: {clientID}, ClientName: {client.ClientName}, NewChannelID: {newChannelID}");
-            }
-            else
-            {
-                var name = GetClientName(clientID);
-                Console.WriteLine($"[SE-TS Bridge] - New client joined current channel. ClientID: {clientID}, ClientName: {name}, NewChannelID: {newChannelID}");
-                client = AddClientThreadSafe(clientID, name);
+                Console.WriteLine($"[SE-TS Bridge] - Channel {channelId} was missing when removing.");
+                return;
             }
 
-            if (inGameChannel)
-                SendLocalInfoToClient(client);
-        }
-        else if (oldChannelID == currentChannelId)
-        {
-            var client = GetClientByClientId(clientID);
-
-            if (client != null)
-            {
-                Console.WriteLine($"[SE-TS Bridge] - Client left current channel. ClientID: {clientID}, ClientName: {client.ClientName}, NewChannelID: {newChannelID}");
-                RemoveClientThreadSafe(client, newChannelID != 0);
-            }
-            else
-            {
-                Console.WriteLine($"[SE-TS Bridge] - Unregistered client left current channel. ClientID: {clientID}, OldChannelID: {oldChannelID}");
-            }
-        }
-        else
-        {
-            // A client either moved between channels that aren't the current channnel or they left the server.
+            channel.Parent?.Children.Remove(channel);
         }
     }
 
-    unsafe void OnLocalChannelChanged()
+    unsafe void OnChannelMoved(ulong serverId, ulong channelId, ulong newChannelParentId,
+        ushort invokerId, byte* invokerName, byte* invokerUniqueIdentifier)
     {
-        RefetchTSClients();
+        if (serverId != currentServerId)
+            return;
 
-        inGameChannel = false;
-
-        byte* strPtr;
-        var err = (Ts3ErrorType)functions.getChannelVariableAsString(connHandlerId, currentChannelId, ChannelProperties.CHANNEL_TOPIC, &strPtr);
-
-        if (err == Ts3ErrorType.ERROR_ok)
+        lock (serverChannels)
         {
-            var str = MemoryMarshal.CreateReadOnlySpanFromNullTerminated(strPtr);
+            if (!serverChannels.TryGetValue(channelId, out var channel))
+            {
+                Console.WriteLine($"[SE-TS Bridge] - Channel {channelId} was missing when removing.");
+                return;
+            }
 
-            if (str.SequenceEqual(IngameChannelTopic))
-                inGameChannel = true;
+            var oldParent = channel.Parent;
 
-            functions.freeMemory(strPtr);
+            oldParent?.Children.Remove(channel);
+            channel.Parent = null;
+
+            if (!serverChannels.TryGetValue(newChannelParentId, out var newParent))
+            {
+                Console.WriteLine($"[SE-TS Bridge] - New parent channel {newChannelParentId} of channel {channelId} was missing.");
+                return;
+            }
+
+            channel.Parent = newParent;
+            newParent.Children.Add(channel);
         }
-        else
+    }
+
+    unsafe void OnChannelEdited(ulong serverId, ulong channelId,
+        ushort invokerId, byte* invokerName, byte* invokerUniqueIdentifier)
+    {
+        if (serverId != currentServerId)
+            return;
+
+        Channel? channel;
+
+        lock (serverChannels)
         {
-            Console.WriteLine($"[SE-TS Bridge] - Failed to get channel topic. Error: {err}");
+            if (!serverChannels.TryGetValue(channelId, out channel))
+                return;
         }
 
-        if (inGameChannel)
+        var wasIngame = channel.IsIngame;
+
+        channel.SetTopic(GetChannelTopic(serverId, channelId));
+
+        if (channel == currentChannel && channel.IsIngame && !wasIngame)
             SendLocalInfoToCurrentChannel();
     }
 
-    void CalculateClientVolume(ushort clientID, ref float volume)
+    void OnLocalChannelChanged(ulong oldChannelId)
     {
+        if (oldChannelId != 0)
+        {
+            Channel? oldChannel;
+
+            lock (serverChannels)
+            {
+                serverChannels.TryGetValue(oldChannelId, out oldChannel);
+
+                if (oldChannel != null && !DoesChannelExist(oldChannel.ServerID, oldChannel.ID))
+                    serverChannels.Remove(oldChannel.ID); // May have moved out of a temporary channel
+            }
+
+            if (oldChannel == null)
+                Console.WriteLine($"[SE-TS Bridge] - Failed to find old channel {oldChannelId}");
+        }
+
+        if (currentChannel != null)
+        {
+            if (!currentChannel.IsSubscribed)
+                RefetchTSClients();
+
+            if (currentChannel.IsIngame)
+                SendLocalInfoToCurrentChannel();
+        }
+    }
+
+    void OnChannelSubscribed(ulong serverId, ulong channelId)
+    {
+        if (serverId != currentServerId)
+            return;
+
+        Channel? channel;
+        bool wasSubscribed = false;
+
+        lock (serverChannels)
+        {
+            if (serverChannels.TryGetValue(channelId, out channel))
+            {
+                wasSubscribed = channel.IsSubscribed;
+                channel.IsSubscribed = true;
+            }
+        }
+
+        if (channel != null && channel.IsSubscribed != wasSubscribed)
+            AddClientsFromChannel(channel);
+    }
+
+    void OnChannelSubscribeFinished(ulong serverId, ulong channelId)
+    {
+    }
+
+    void OnChannelUnsubscribed(ulong serverId, ulong channelId)
+    {
+        if (serverId != currentServerId)
+            return;
+
+        lock (serverChannels)
+        {
+            if (serverChannels.TryGetValue(channelId, out var channel))
+                channel.IsSubscribed = false;
+        }
+    }
+
+    void OnChannelUnsubscribeFinished(ulong serverId, ulong channelId)
+    {
+    }
+
+    void OnClientMoveSubscriptionEvent(ulong serverId, ushort clientId,
+        ulong oldChannelId, ulong newChannelId, Visibility visibility)
+    {
+    }
+
+    void HandleClientMoved(ulong serverConnectionHandlerID, ushort clientID, ulong oldChannelID, ulong newChannelID)
+    {
+        if (serverConnectionHandlerID != currentServerId)
+            return;
+
+        Channel? oldChannel, newChannel;
+
+        lock (serverChannels)
+        {
+            serverChannels.TryGetValue(oldChannelID, out oldChannel);
+            serverChannels.TryGetValue(newChannelID, out newChannel);
+        }
+
+        if (clientID == localClientId)
+        {
+            currentChannel = newChannel;
+
+            Console.WriteLine($"[SE-TS Bridge] - Current channel changed. NewChannelID: {newChannelID}");
+
+            if (newChannelID != 0)
+            {
+                if (currentChannel != null)
+                    OnLocalChannelChanged(oldChannelID);
+                else
+                    Console.WriteLine($"[SE-TS Bridge] - Failed to find new channel with ID {newChannelID}.");
+            }
+
+            return;
+        }
+
         var client = GetClientByClientId(clientID);
 
+        if (newChannel == null)
+        {
+            if (client != null)
+            {
+                Console.WriteLine($"[SE-TS Bridge] - Client left server. ClientID: {clientID}, ClientName: {client.ClientName}, OldChannelID: {oldChannelID}, NewChannelID: {newChannelID}");
+
+                RemoveClientThreadSafe(client, resetPos: false);
+            }
+            else
+            {
+                Console.WriteLine($"[SE-TS Bridge] - Unregistered client left server. ClientID: {clientID}, OldChannelID: {oldChannelID}, NewChannelID: {newChannelID}");
+            }
+
+            return;
+        }
+
+        if (newChannel == currentChannel || newChannel.IsSubscribed)
+        {
+            if (client != null)
+            {
+                client.Channel = newChannel;
+                newChannel.ClientCount++;
+
+                Console.WriteLine($"[SE-TS Bridge] - Client joined current/subscribed channel. ClientID: {clientID}, ClientName: {client.ClientName}, OldChannelID: {oldChannelID}, NewChannelID: {newChannelID}");
+            }
+            else
+            {
+                var name = GetClientName(serverConnectionHandlerID, clientID);
+
+                Console.WriteLine($"[SE-TS Bridge] - New client joined current/subscribed channel. ClientID: {clientID}, ClientName: {name}, OldChannelID: {oldChannelID}, NewChannelID: {newChannelID}");
+
+                client = AddClientThreadSafe(clientID, newChannel, name);
+            }
+
+            if (oldChannel != null)
+                oldChannel.ClientCount--;
+
+            if (newChannel.IsIngame)
+                SendLocalInfoToClient(client);
+
+            UpdateClientPosition(client);
+        }
+        else if (oldChannel != null && (oldChannel == currentChannel || oldChannel.IsSubscribed))
+        {
+            if (client != null)
+            {
+                Console.WriteLine($"[SE-TS Bridge] - Client left current/subscribed channel. ClientID: {clientID}, ClientName: {client.ClientName}, OldChannelID: {oldChannelID}, NewChannelID: {newChannelID}");
+
+                RemoveClientThreadSafe(client, resetPos: true);
+            }
+            else
+            {
+                Console.WriteLine($"[SE-TS Bridge] - Unregistered client left current/subscribed channel. ClientID: {clientID}, OldChannelID: {oldChannelID}, NewChannelID: {newChannelID}");
+            }
+        }
+        else
+        {
+            if (oldChannel != null)
+                oldChannel.ClientCount--;
+
+            if (newChannel != null)
+                newChannel.ClientCount++;
+        }
+
+        // Else the client moved between channels that aren't current/subscribed.
+    }
+
+    void OnTalkStatusChanged(ulong serverId, ushort clientId, TalkStatus status, bool isReceivedWhisper)
+    {
+        if (serverId != currentServerId)
+            return;
+
+        var client = GetClientByClientId(clientId);
+
         if (client == null)
+            return;
+
+        if (isReceivedWhisper) // Event caused by whisper
+        {
+            bool isWhispering = status == TalkStatus.STATUS_TALKING;
+
+            //Console.WriteLine($"[SE-TS Bridge] - Setting client {clientId} whispering state to {isWhispering}");
+
+            if (isWhispering != client.IsWhispering)
+            {
+                client.IsWhispering = isWhispering;
+                UpdateClientPosition(client);
+            }
+        }
+    }
+
+    void CalculateClientVolume(ushort clientId, ref float volume)
+    {
+        var client = GetClientByClientId(clientId);
+
+        if (client == null || client.Position == default)
             return;
 
         // TODO: Scale volume down when client is facing away
@@ -1159,42 +1550,6 @@ public class Plugin
         volume = vol;
     }
 
-    unsafe void OnChannelEdited(ulong serverConnectionHandlerID, ulong channelID, ushort invokerID, byte* invokerName, byte* invokerUniqueIdentifier)
-    {
-        if (serverConnectionHandlerID != connHandlerId)
-            return;
-
-        if (channelID != currentChannelId)
-            return;
-
-        byte* strPtr;
-        var err = (Ts3ErrorType)functions.getChannelVariableAsString(serverConnectionHandlerID, channelID, ChannelProperties.CHANNEL_TOPIC, &strPtr);
-
-        if (err != Ts3ErrorType.ERROR_ok)
-        {
-            Console.WriteLine($"[SE-TS Bridge] - Failed to get channel topic. Error: {err}");
-            return;
-        }
-
-        var str = MemoryMarshal.CreateReadOnlySpanFromNullTerminated(strPtr);
-        bool isIngame = str.SequenceEqual(IngameChannelTopic);
-
-        functions.freeMemory(strPtr);
-
-        if (isIngame)
-        {
-            if (!inGameChannel)
-            {
-                inGameChannel = true;
-                SendLocalInfoToCurrentChannel();
-            }
-        }
-        else
-        {
-            inGameChannel = false;
-        }
-    }
-
     #region Wrapper Methods
 
     unsafe void LogMessage(string message, LogLevel level, string? channel)
@@ -1205,7 +1560,7 @@ public class Plugin
 
         try
         {
-            var err = (Ts3ErrorType)functions.logMessage((byte*)msgPtr, level, (byte*)chnPtr, connHandlerId);
+            var err = (Ts3ErrorType)functions.logMessage((byte*)msgPtr, level, (byte*)chnPtr, logID: 0);
 
             if (err != Ts3ErrorType.ERROR_ok)
                 Console.WriteLine($"[SE-TS Bridge] - Failed to log message \"{message}\"");
@@ -1223,7 +1578,7 @@ public class Plugin
     {
         Console.WriteLine($"[SE-TS Bridge] - Setting system 3D settings. DistanceFactor: {distanceFactor}, RolloffScale: {rolloffScale}.");
 
-        var err = (Ts3ErrorType)functions.systemset3DSettings(connHandlerId, distanceFactor, rolloffScale);
+        var err = (Ts3ErrorType)functions.systemset3DSettings(currentServerId, distanceFactor, rolloffScale);
 
         if (err != Ts3ErrorType.ERROR_ok)
         {
@@ -1240,7 +1595,7 @@ public class Plugin
 
         Vector3 zeroPos = default;
 
-        var err = (Ts3ErrorType)functions.systemset3DListenerAttributes(connHandlerId, (TS3_VECTOR*)&zeroPos, (TS3_VECTOR*)&forward, (TS3_VECTOR*)&up);
+        var err = (Ts3ErrorType)functions.systemset3DListenerAttributes(currentServerId, (TS3_VECTOR*)&zeroPos, (TS3_VECTOR*)&forward, (TS3_VECTOR*)&up);
 
         if (err != Ts3ErrorType.ERROR_ok)
             Console.WriteLine($"[SE-TS Bridge] - Failed to set listener attribs. Error: {err}");
@@ -1258,21 +1613,24 @@ public class Plugin
 
         position.Z = -position.Z;
 
-        var err = (Ts3ErrorType)functions.channelset3DAttributes(connHandlerId, clientId, (TS3_VECTOR*)&position);
+        var err = (Ts3ErrorType)functions.channelset3DAttributes(currentServerId, clientId, (TS3_VECTOR*)&position);
 
         if (err != Ts3ErrorType.ERROR_ok)
             Console.WriteLine($"[SE-TS Bridge] - Failed to set client pos to {position}. Error: {err}");
     }
 
-    unsafe bool GetLocalClientAndChannelID()
+    unsafe bool GetLocalClientAndChannelIds(ulong serverId, out ushort clientId, out ulong channelId)
     {
-        ushort clientId;
-        var err = (Ts3ErrorType)functions.getClientID(connHandlerId, &clientId);
+        clientId = 0;
+        channelId = 0;
+
+        ushort clientID;
+        var err = (Ts3ErrorType)functions.getClientID(serverId, &clientID);
 
         if (err == Ts3ErrorType.ERROR_ok)
         {
-            localClientId = clientId;
-            Console.WriteLine($"[SE-TS Bridge] - Got client ID: {clientId}");
+            clientId = clientID;
+            Console.WriteLine($"[SE-TS Bridge] - Got client ID: {clientID}");
         }
         else
         {
@@ -1280,54 +1638,121 @@ public class Plugin
             return false;
         }
 
-        ulong channelId;
-        err = (Ts3ErrorType)functions.getChannelOfClient(connHandlerId, localClientId, &channelId);
+        ulong channelID;
+        err = (Ts3ErrorType)functions.getChannelOfClient(serverId, clientID, &channelID);
 
-        if (err == Ts3ErrorType.ERROR_ok)
-        {
-            currentChannelId = channelId;
-            Console.WriteLine($"[SE-TS Bridge] - Got channel ID: {channelId}");
-        }
-        else
+        if (err != Ts3ErrorType.ERROR_ok)
         {
             Console.WriteLine($"[SE-TS Bridge] - Failed to get channel ID. Error: {err}");
             return false;
         }
 
+        channelId = channelID;
+        Console.WriteLine($"[SE-TS Bridge] - Got channel ID: {channelID}");
+
         return true;
     }
 
-    unsafe string? GetClientName(ushort clientId)
+    unsafe bool DoesChannelExist(ulong serverId, ulong channelId)
     {
-        byte* nameBuffer;
-        var err = (Ts3ErrorType)functions.getClientVariableAsString(connHandlerId, clientId, (nint)ClientProperties.CLIENT_NICKNAME, &nameBuffer);
+        ulong parentId;
+        var err = (Ts3ErrorType)functions.getParentChannelOfChannel(serverId, channelId, &parentId);
 
         if (err == Ts3ErrorType.ERROR_ok)
+            return true;
+
+        if (err != Ts3ErrorType.ERROR_channel_invalid_id)
+            Console.Write($"[SE-TS Bridge] - Unexpected error when checkng channel exists. Error: {err}");
+
+        return false;
+    }
+
+    unsafe Ts3ErrorType GetChannelStringProperty(ulong serverId, ulong channelId, ChannelProperties property, out string? value)
+    {
+        value = null;
+
+        byte* strPtr;
+        var err = (Ts3ErrorType)functions.getChannelVariableAsString(serverId, channelId, (nint)property, &strPtr);
+
+        if (err != Ts3ErrorType.ERROR_ok)
+            return err;
+
+        value = Encoding.UTF8.GetString(MemoryMarshal.CreateReadOnlySpanFromNullTerminated(strPtr));
+        err = (Ts3ErrorType)functions.freeMemory(strPtr);
+
+        if (err != Ts3ErrorType.ERROR_ok)
+            Console.WriteLine($"[SE-TS Bridge] - Failed to free channel string value pointer. Error: {err}");
+
+        return err;
+    }
+
+    unsafe bool GetChannelName(ulong serverId, ulong channelId, [NotNullWhen(true)] out string? name)
+    {
+        var err = GetChannelStringProperty(serverId, channelId, ChannelProperties.CHANNEL_NAME, out name);
+
+        if (err == Ts3ErrorType.ERROR_ok && name != null)
+            return true;
+
+        Console.WriteLine($"[SE-TS Bridge] - Failed to get channel name. Error: {err}");
+
+        return false;
+    }
+
+    unsafe bool GetChannelTopic(ulong serverId, ulong channelId, [NotNullWhen(true)] out string? topic)
+    {
+        var err = GetChannelStringProperty(serverId, channelId, ChannelProperties.CHANNEL_TOPIC, out topic);
+
+        if (err == Ts3ErrorType.ERROR_ok && topic != null)
+            return true;
+
+        Console.WriteLine($"[SE-TS Bridge] - Failed to get channel topic. Error: {err}");
+
+        return false;
+    }
+
+    unsafe bool? GetChannelIsSubscribed(ulong serverId, ulong channelId)
+    {
+        int isSubscribed;
+        var err = (Ts3ErrorType)functions.getChannelVariableAsInt(serverId, channelId, (nint)ChannelProperties.CHANNEL_FLAG_ARE_SUBSCRIBED, &isSubscribed);
+
+        if (err != Ts3ErrorType.ERROR_ok)
         {
-            var name = Marshal.PtrToStringUTF8((IntPtr)nameBuffer);
-            err = (Ts3ErrorType)functions.freeMemory(nameBuffer);
-
-            if (err != Ts3ErrorType.ERROR_ok)
-                Console.WriteLine($"[SE-TS Bridge] - Failed to free client name. Error: {err}");
-
-            return name;
+            Console.WriteLine($"[SE-TS Bridge] - Failed to get if channel is subscribed. Error: {err}");
+            return null;
         }
-        else
+
+        return isSubscribed != 0;
+    }
+
+    unsafe string? GetClientName(ulong serverId, ushort clientId)
+    {
+        byte* nameBuffer;
+        var err = (Ts3ErrorType)functions.getClientVariableAsString(serverId, clientId, (nint)ClientProperties.CLIENT_NICKNAME, &nameBuffer);
+
+        if (err != Ts3ErrorType.ERROR_ok)
         {
             Console.WriteLine($"[SE-TS Bridge] - Failed to get client name. Error: {err}");
             return null;
         }
+
+        var name = Marshal.PtrToStringUTF8((IntPtr)nameBuffer);
+        err = (Ts3ErrorType)functions.freeMemory(nameBuffer);
+
+        if (err != Ts3ErrorType.ERROR_ok)
+            Console.WriteLine($"[SE-TS Bridge] - Failed to free client name pointer. Error: {err}");
+
+        return name;
     }
 
-    unsafe bool GetLocalMuteStateForClient(ulong serverConnectionHandlerID, ushort clientID, out bool muted)
+    unsafe bool GetLocalMuteStateForClient(ulong serverId, ushort clientId, out bool muted)
     {
         int mutedState;
-        var err = (Ts3ErrorType)functions.getClientVariableAsInt(serverConnectionHandlerID, clientID, (int)ClientProperties.CLIENT_IS_MUTED, &mutedState);
+        var err = (Ts3ErrorType)functions.getClientVariableAsInt(serverId, clientId, (int)ClientProperties.CLIENT_IS_MUTED, &mutedState);
 
         if (err != Ts3ErrorType.ERROR_ok)
         {
             muted = false;
-            Console.WriteLine($"[SE-TS Bridge] - Failed to get client local muting state. ClientID: {clientID}, Error: {err}");
+            Console.WriteLine($"[SE-TS Bridge] - Failed to get client local muting state. ClientID: {clientId}, Error: {err}");
             return false;
         }
 
@@ -1335,13 +1760,13 @@ public class Plugin
         return true;
     }
 
-    unsafe void SendMessageToClient(ushort clientId, string message)
+    unsafe void SendMessageToClient(ulong serverId, ushort clientId, string message)
     {
         IntPtr ptr = Marshal.StringToHGlobalAnsi(message);
 
         try
         {
-            var err = (Ts3ErrorType)functions.requestSendPrivateTextMsg(connHandlerId, (byte*)ptr, clientId, null);
+            var err = (Ts3ErrorType)functions.requestSendPrivateTextMsg(serverId, (byte*)ptr, clientId, null);
 
             if (err != Ts3ErrorType.ERROR_ok)
                 Console.WriteLine($"[SE-TS Bridge] - Failed to send private message to clientID {clientId}. Error: {err}");
@@ -1352,34 +1777,69 @@ public class Plugin
         }
     }
 
-    unsafe bool MuteClientLocally(ulong serverConnectionHandlerID, ushort clientID)
+    unsafe bool MuteClientLocally(ulong serverId, ushort clientId)
     {
-        ushort* clientArray = stackalloc ushort[2] { clientID, 0 };
+        ushort* clientArray = stackalloc ushort[2] { clientId, 0 };
 
-        var err = (Ts3ErrorType)functions.requestMuteClients(serverConnectionHandlerID, clientArray, null);
+        var err = (Ts3ErrorType)functions.requestMuteClients(serverId, clientArray, null);
 
         if (err != Ts3ErrorType.ERROR_ok)
         {
-            Console.WriteLine($"[SE-TS Bridge] - Failed to mute client locally. ClientID: {clientID}, Error: {err}");
+            Console.WriteLine($"[SE-TS Bridge] - Failed to mute client locally. ClientID: {clientId}, Error: {err}");
             return false;
         }
 
         return true;
     }
 
-    unsafe bool UnmuteClientLocally(ulong serverConnectionHandlerID, ushort clientID)
+    unsafe bool UnmuteClientLocally(ulong serverId, ushort clientId)
     {
-        ushort* clientArray = stackalloc ushort[2] { clientID, 0 };
+        ushort* clientArray = stackalloc ushort[2] { clientId, 0 };
 
-        var err = (Ts3ErrorType)functions.requestUnmuteClients(serverConnectionHandlerID, clientArray, null);
+        var err = (Ts3ErrorType)functions.requestUnmuteClients(serverId, clientArray, null);
 
         if (err != Ts3ErrorType.ERROR_ok)
         {
-            Console.WriteLine($"[SE-TS Bridge] - Failed to unmute client locally. ClientID: {clientID}, Error: {err}");
+            Console.WriteLine($"[SE-TS Bridge] - Failed to unmute client locally. ClientID: {clientId}, Error: {err}");
             return false;
         }
 
         return true;
+    }
+
+    unsafe ulong? GetParentChannel(ulong serverId, ulong channelId)
+    {
+        ulong parentChannel;
+        var err = (Ts3ErrorType)functions.getParentChannelOfChannel(serverId, channelId, &parentChannel);
+
+        if (err != Ts3ErrorType.ERROR_ok)
+        {
+            Console.WriteLine($"[SE-TS Bridge] - Failed to get parent channel. Error: {err}");
+            return null;
+        }
+
+        return parentChannel;
+    }
+
+    unsafe string? GetChannelTopic(ulong serverId, ulong channelId)
+    {
+        byte* strPtr;
+        var err = (Ts3ErrorType)functions.getChannelVariableAsString(serverId, channelId, (nint)ChannelProperties.CHANNEL_TOPIC, &strPtr);
+
+        if (err != Ts3ErrorType.ERROR_ok)
+        {
+            Console.WriteLine($"[SE-TS Bridge] - Failed to get channel topic. Error: {err}");
+            return null;
+        }
+
+        var topic = Encoding.UTF8.GetString(MemoryMarshal.CreateReadOnlySpanFromNullTerminated(strPtr));
+
+        err = (Ts3ErrorType)functions.freeMemory(strPtr);
+
+        if (err != Ts3ErrorType.ERROR_ok)
+            Console.WriteLine($"[SE-TS Bridge] - Failed to free channel topic pointer. Error: {err}");
+
+        return topic;
     }
 
     unsafe void PrintMessageToCurrentTab(string message)
@@ -1479,7 +1939,7 @@ public class Plugin
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_currentServerConnectionChanged")]
     public unsafe static void ts3plugin_currentServerConnectionChanged(ulong serverConnectionHandlerID)
     {
-        instance.connHandlerId = serverConnectionHandlerID;
+        instance.currentServerId = serverConnectionHandlerID;
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onConnectStatusChangeEvent")]
@@ -1491,16 +1951,43 @@ public class Plugin
 
         if (connStatus == ConnectStatus.STATUS_DISCONNECTED)
         {
-            instance.localClientId = 0;
-            instance.currentChannelId = 0;
-            instance.RemoveAllClients();
+            instance.OnServerDisconnected();
         }
-        else if (connStatus == ConnectStatus.STATUS_CONNECTION_ESTABLISHED
-            && instance.GetLocalClientAndChannelID())
+        else if (connStatus == ConnectStatus.STATUS_CONNECTION_ESTABLISHED)
         {
-            instance.Set3DSettings(instance.distanceScale, 1);
-            instance.OnLocalChannelChanged();
+            if (instance.UpdateLocalClientIdAndChannel(instance.currentServerId))
+            {
+                instance.Set3DSettings(instance.distanceScale, 1);
+                instance.RefetchTSClients();
+
+                if (instance.currentChannel is { IsIngame: true })
+                    instance.SendLocalInfoToCurrentChannel();
+            }
         }
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onNewChannelEvent")]
+    public unsafe static void ts3plugin_onNewChannelEvent(ulong serverConnectionHandlerID, ulong channelID, ulong channelParentID)
+    {
+        instance.OnNewChannel(serverConnectionHandlerID, channelID, channelParentID);
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onNewChannelCreatedEvent")]
+    public unsafe static void ts3plugin_onNewChannelCreatedEvent(ulong serverConnectionHandlerID, ulong channelID, ulong channelParentID, ushort invokerID, /*const */byte* invokerName, /*const */byte* invokerUniqueIdentifier)
+    {
+        instance.OnNewChannelCreated(serverConnectionHandlerID, channelID, channelParentID, invokerID, invokerName, invokerUniqueIdentifier);
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onDelChannelEvent")]
+    public unsafe static void ts3plugin_onDelChannelEvent(ulong serverConnectionHandlerID, ulong channelID, ushort invokerID, /*const */byte* invokerName, /*const */byte* invokerUniqueIdentifier)
+    {
+        instance.OnChannelDeleted(serverConnectionHandlerID, channelID, invokerID, invokerName, invokerUniqueIdentifier);
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onChannelMoveEvent")]
+    public unsafe static void ts3plugin_onChannelMoveEvent(ulong serverConnectionHandlerID, ulong channelID, ulong newChannelParentID, ushort invokerID, /*const */byte* invokerName, /*const */byte* invokerUniqueIdentifier)
+    {
+        instance.OnChannelMoved(serverConnectionHandlerID, channelID, newChannelParentID, invokerID, invokerName, invokerUniqueIdentifier);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onClientMoveEvent")]
@@ -1546,17 +2033,13 @@ public class Plugin
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onTalkStatusChangeEvent")]
     public static void ts3plugin_onTalkStatusChangeEvent(ulong serverConnectionHandlerID, int status, int isReceivedWhisper, ushort clientID)
     {
-        if (serverConnectionHandlerID != instance.connHandlerId)
-            return;
-
-        if (isReceivedWhisper == 1) // Event caused by whisper
-            instance.SetClientIsWhispering(clientID, (TalkStatus)status == TalkStatus.STATUS_TALKING);
+        instance.OnTalkStatusChanged(serverConnectionHandlerID, clientID, (TalkStatus)status, isReceivedWhisper != 0);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onCustom3dRolloffCalculationClientEvent")]
     public unsafe static void ts3plugin_onCustom3dRolloffCalculationClientEvent(ulong serverConnectionHandlerID, ushort clientID, float distance, float* volume)
     {
-        if (serverConnectionHandlerID != instance.connHandlerId)
+        if (serverConnectionHandlerID != instance.currentServerId)
             return;
 
         instance.CalculateClientVolume(clientID, ref *volume);
@@ -1566,7 +2049,7 @@ public class Plugin
     public unsafe static void ts3plugin_onPluginCommandEvent(ulong serverConnectionHandlerID, byte* pluginName, byte* pluginCommand,
         ushort invokerClientID, byte* invokerName, byte* invokerUniqueIdentity)
     {
-        if (serverConnectionHandlerID != instance.connHandlerId)
+        if (serverConnectionHandlerID != instance.currentServerId)
             return;
 
         // Commands can get sent to yourself
@@ -1596,7 +2079,7 @@ public class Plugin
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onClientDisplayNameChanged")]
     public unsafe static void ts3plugin_onClientDisplayNameChanged(ulong serverConnectionHandlerID, ushort clientID, /*const */byte* displayName, /*const */byte* uniqueClientIdentifier)
     {
-        if (serverConnectionHandlerID != instance.connHandlerId)
+        if (serverConnectionHandlerID != instance.currentServerId)
             return;
 
         if (clientID == instance.localClientId)
@@ -1621,6 +2104,35 @@ public class Plugin
         instance.OnChannelEdited(serverConnectionHandlerID, channelID, invokerID, invokerName, invokerUniqueIdentifier);
     }
 
+    [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onChannelSubscribeEvent")]
+    public unsafe static void ts3plugin_onChannelSubscribeEvent(ulong serverConnectionHandlerID, ulong channelID)
+    {
+        instance.OnChannelSubscribed(serverConnectionHandlerID, channelID);
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onChannelSubscribeFinishedEvent")]
+    public unsafe static void ts3plugin_onChannelSubscribeFinishedEvent(ulong serverConnectionHandlerID, ulong channelID)
+    {
+        instance.OnChannelSubscribeFinished(serverConnectionHandlerID, channelID);
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onChannelUnsubscribeEvent")]
+    public unsafe static void ts3plugin_onChannelUnsubscribeEvent(ulong serverConnectionHandlerID, ulong channelID)
+    {
+        instance.OnChannelUnsubscribed(serverConnectionHandlerID, channelID);
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onChannelUnsubscribeFinishedEvent")]
+    public unsafe static void ts3plugin_onChannelUnsubscribeFinishedEvent(ulong serverConnectionHandlerID, ulong channelID)
+    {
+        instance.OnChannelUnsubscribeFinished(serverConnectionHandlerID, channelID);
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onClientMoveSubscriptionEvent")]
+    public unsafe static void ts3plugin_onClientMoveSubscriptionEvent(ulong serverConnectionHandlerID, ushort clientID, ulong oldChannelID, ulong newChannelID, Visibility visibility)
+    {
+        instance.OnClientMoveSubscriptionEvent(serverConnectionHandlerID, clientID, oldChannelID, newChannelID, visibility);
+    }
 #pragma warning restore IDE1006 // Naming Styles
     #endregion
 }

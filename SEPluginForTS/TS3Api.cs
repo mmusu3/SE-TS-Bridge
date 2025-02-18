@@ -125,7 +125,7 @@ public unsafe struct TS3Functions
     /* Channel info */
     public uint getChannelVariableAsInt(ulong serverConnectionHandlerID, ulong channelID, nint flag, int* result) => ((delegate*<ulong, ulong, nint, int*, uint>)pointers[84])(serverConnectionHandlerID, channelID, flag, result);
     public uint getChannelVariableAsulong(ulong serverConnectionHandlerID, ulong channelID, nint flag, ulong* result) => ((delegate*<ulong, ulong, nint, ulong*, uint>)pointers[85])(serverConnectionHandlerID, channelID, flag, result);
-    public uint getChannelVariableAsString(ulong serverConnectionHandlerID, ulong channelID, ChannelProperties flag, byte** result) => ((delegate*<ulong, ulong, nint, byte**, uint>)pointers[86])(serverConnectionHandlerID, channelID, (nint)flag, result);
+    public uint getChannelVariableAsString(ulong serverConnectionHandlerID, ulong channelID, nint flag, byte** result) => ((delegate*<ulong, ulong, nint, byte**, uint>)pointers[86])(serverConnectionHandlerID, channelID, (nint)flag, result);
     public uint getChannelIDFromChannelNames(ulong serverConnectionHandlerID, byte** channelNameArray, ulong* result) => ((delegate*<ulong, byte**, ulong*, uint>)pointers[87])(serverConnectionHandlerID, channelNameArray, result);
     public uint setChannelVariableAsInt(ulong serverConnectionHandlerID, ulong channelID, nint flag, int value) => ((delegate*<ulong, ulong, nint, int, uint>)pointers[88])(serverConnectionHandlerID, channelID, flag, value);
     public uint setChannelVariableAsulong(ulong serverConnectionHandlerID, ulong channelID, nint flag, ulong value) => ((delegate*<ulong, ulong, nint, ulong, uint>)pointers[89])(serverConnectionHandlerID, channelID, flag, value);
@@ -460,8 +460,70 @@ public enum ChannelProperties
     /// Server >= 3.10.0
     /// </summary>
     CHANNEL_UNIQUE_IDENTIFIER,
-    CHANNEL_ENDMARKER,
-}
+
+    // Rare properties
+
+    CHANNEL_DUMMY_3,
+    CHANNEL_DUMMY_4,
+    CHANNEL_DUMMY_5,
+    CHANNEL_DUMMY_6,
+    CHANNEL_DUMMY_7,
+
+    /// <summary>
+    /// Available for all channels that are "in view", always up-to-date
+    /// </summary>
+    CHANNEL_FLAG_MAXCLIENTS_UNLIMITED,
+    /// <summary>
+    /// Available for all channels that are "in view", always up-to-date
+    /// </summary>
+    CHANNEL_FLAG_MAXFAMILYCLIENTS_UNLIMITED,
+    /// <summary>
+    /// Available for all channels that are "in view", always up-to-date
+    /// </summary>
+    CHANNEL_FLAG_MAXFAMILYCLIENTS_INHERITED,
+    /// <summary>
+    /// Only available client side, stores whether we are subscribed to this channel
+    /// </summary>
+    CHANNEL_FLAG_ARE_SUBSCRIBED,
+    /// <summary>
+    /// Not available client side, the folder used for file-transfers for this channel
+    /// </summary>
+    CHANNEL_FILEPATH,
+    /// <summary>
+    /// Available for all channels that are "in view", always up-to-date
+    /// </summary>
+    CHANNEL_NEEDED_TALK_POWER,
+    /// <summary>
+    /// Available for all channels that are "in view", always up-to-date
+    /// </summary>
+    CHANNEL_FORCED_SILENCE,
+    /// <summary>
+    /// Available for all channels that are "in view", always up-to-date
+    /// </summary>
+    CHANNEL_NAME_PHONETIC,
+    /// <summary>
+    /// Available for all channels that are "in view", always up-to-date
+    /// </summary>
+    CHANNEL_ICON_ID,
+    /// <summary>
+    /// Available for all channels that are "in view", always up-to-date
+    /// </summary>
+    CHANNEL_BANNER_GFX_URL,
+    /// <summary>
+    /// Available for all channels that are "in view", always up-to-date
+    /// </summary>
+    CHANNEL_BANNER_MODE,
+    CHANNEL_PERMISSION_HINTS,
+    /// <summary>
+    /// Storage space that is allowed to be used by this channels files (in MiB)
+    /// </summary>
+    CHANNEL_STORAGE_QUOTA,
+    CHANNEL_ENDMARKER_RARE,
+    /// <summary>
+    /// (for clientlibv2) expected delete time in monotonic clock seconds or 0 if nothing is expected
+    /// </summary>
+    CHANNEL_DELETE_DELAY_DEADLINE = 127
+};
 
 enum ClientProperties
 {
