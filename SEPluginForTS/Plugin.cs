@@ -211,15 +211,23 @@ public class Plugin
         return (IntPtr)ptr;
     }
 
+    static void WriteConsole(string text) => Console.WriteLine("[SE-TS Bridge] - " + text);
+
     [Conditional("DEBUG")]
-    static void DebugConsole(string text) => Console.WriteLine(text);
+    static void DebugConsole(string text) => Console.WriteLine("[SE-TS Bridge] - " + text);
 
     [Conditional("RELEASE")]
-    static void ReleaseConsole(string text) => Console.WriteLine(text);
+    static void ReleaseConsole(string text) => Console.WriteLine("[SE-TS Bridge] - " + text);
+
+    void WriteConsoleAndLog(LogLevel logLevel, string text)
+    {
+        Console.WriteLine("[SE-TS Bridge] - " + text);
+        LogMessage(text, logLevel, "SE-TS Bridge");
+    }
 
     unsafe void Init()
     {
-        AddOrPrintConsoleMessage("[SE-TS Bridge] - Initializing.");
+        AddOrPrintConsoleMessage("Initializing.");
 
         currentServerId = functions.getCurrentServerConnectionHandlerID();
 
@@ -261,7 +269,7 @@ public class Plugin
         catch (Exception ex)
         {
             settingsText = null;
-            AddOrPrintConsoleMessage($"[SE-TS Bridge] - Failed to read settings file. {ex}");
+            AddOrPrintConsoleMessage($"Failed to read settings file. {ex}");
         }
 
         if (settingsText != null)
@@ -271,11 +279,11 @@ public class Plugin
             if (parts.Length == 2 && parts[0] == "RemotePCName")
             {
                 remoteComputerName = parts[1];
-                AddOrPrintConsoleMessage($"[SE-TS Bridge] - Assigning '{remoteComputerName}' as remote PC name.");
+                AddOrPrintConsoleMessage($"Assigning '{remoteComputerName}' as remote PC name.");
             }
             else
             {
-                AddOrPrintConsoleMessage("[SE-TS Bridge] - Invalid settings file.");
+                AddOrPrintConsoleMessage("Invalid settings file.");
             }
         }
     }
@@ -292,7 +300,7 @@ public class Plugin
 
     void Dispose()
     {
-        Console.WriteLine("[SE-TS Bridge] - Disposing.");
+        WriteConsoleAndLog(LogLevel.LogLevel_INFO, "Disposing.");
 
         cancellationTokenSource.Cancel();
 
@@ -319,7 +327,7 @@ public class Plugin
         localClientId = 0;
         currentChannel = null;
 
-        Console.WriteLine("[SE-TS Bridge] - Disposed.");
+        WriteConsoleAndLog(LogLevel.LogLevel_INFO, "Disposed.");
     }
 
     async ValueTask ConnectPipe(CancellationToken cancellationToken)
@@ -337,9 +345,9 @@ public class Plugin
             catch (IOException ioEx) when ((uint)ioEx.HResult == 0x80070035)
             {
                 if (remoteComputerName != ".")
-                    AddOrPrintConsoleMessage($"[SE-TS Bridge] - Failed to connect to remote computer '{remoteComputerName}'");
+                    AddOrPrintConsoleMessage($"Failed to connect to remote computer '{remoteComputerName}'");
                 else
-                    AddOrPrintConsoleMessage("[SE-TS Bridge] - Failed to connect pipe.");
+                    AddOrPrintConsoleMessage("Failed to connect pipe.");
 
                 pipeStream!.Dispose();
                 pipeStream = null;
@@ -348,7 +356,7 @@ public class Plugin
 
             if (printWaitMessage)
             {
-                AddOrPrintConsoleMessage("[SE-TS Bridge] - Waiting for game connection.");
+                AddOrPrintConsoleMessage("Waiting for game connection.");
                 printWaitMessage = false;
             }
 
@@ -358,6 +366,8 @@ public class Plugin
 
     void AddOrPrintConsoleMessage(string message)
     {
+        message = "[SE-TS Bridge] - " + message;
+
         Console.WriteLine(message);
 
         lock (pendingConsoleMessages)
@@ -408,7 +418,7 @@ public class Plugin
         if (pipeStream == null)
             goto waitForPipe;
 
-        AddOrPrintConsoleMessage("[SE-TS Bridge] - Established connection to Space Engineers plugin.");
+        AddOrPrintConsoleMessage("Established connection to Space Engineers plugin.");
 
         while (pipeStream.IsConnected && !cancellationToken.IsCancellationRequested)
         {
@@ -422,18 +432,18 @@ public class Plugin
                 switch (result.Result)
                 {
                 case UpdateResult.Canceled:
-                    Console.WriteLine($"[SE-TS Bridge] - Update was canceled.");
+                    WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Update was canceled.");
                     break;
                 case UpdateResult.Closed:
-                    Console.WriteLine($"[SE-TS Bridge] - Connection was closed. {result.Error}");
+                    WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Connection was closed. {result.Error}");
                     break;
                 case UpdateResult.WrongVersion:
-                    var msg = $"[SE-TS Bridge] - Plugin communication failed. {result.Error}";
-                    Console.WriteLine(msg);
-                    PrintMessageToCurrentTab(msg);
+                    var msg = $"Plugin communication failed. {result.Error}";
+                    WriteConsoleAndLog(LogLevel.LogLevel_WARNING, msg);
+                    PrintMessageToCurrentTab("[SE-TS Bridge] - " + msg);
                     break;
                 case UpdateResult.Corrupt:
-                    Console.WriteLine($"[SE-TS Bridge] - Update failed with result {result.Result}. {result.Error}");
+                    WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Update failed with result {result.Result}. {result.Error}");
                     break;
                 }
 
@@ -443,14 +453,12 @@ public class Plugin
             {
                 if (ex is OperationCanceledException)
                 {
-                    Console.WriteLine($"[SE-TS Bridge] - Update was canceled.");
+                    WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Update was canceled.");
                     break;
                 }
                 else
                 {
-                    var msg = $"[SE-TS Bridge] - Exception while updating {ex}";
-                    Console.WriteLine(msg);
-                    LogMessage(msg, LogLevel.LogLevel_ERROR, "[SE-TS Bridge]");
+                    WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Exception while updating {ex}");
                 }
             }
         }
@@ -606,7 +614,7 @@ public class Plugin
 
         if (!formatSuccess)
         {
-            Console.WriteLine("[SE-TS Bridge] - Failed to format GameInfo command, insufficient buffer size.");
+            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, "Failed to format GameInfo command, insufficient buffer size.");
             return false;
         }
 
@@ -621,7 +629,7 @@ public class Plugin
 
         if (!formatSuccess)
         {
-            Console.WriteLine("[SE-TS Bridge] - Failed to format GameInfo command, insufficient buffer size.");
+            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, "Failed to format GameInfo command, insufficient buffer size.");
             return false;
         }
 
@@ -678,11 +686,11 @@ public class Plugin
 
         if (numStates < numPlayers)
         {
-            Console.WriteLine($"[SE-TS Bridge] - Error processing client states. Expected {numPlayers} states but only had {numStates}.");
+            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Error processing client states. Expected {numPlayers} states but only had {numStates}.");
             return;
         }
 
-        //Console.WriteLine($"[SE-TS Bridge] - Processing {states.Length} client states.");
+        //WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Processing {states.Length} client states.");
 
         for (int i = 0; i < numPlayers; i++)
         {
@@ -700,14 +708,14 @@ public class Plugin
             }
             //else
             //{
-            //    Console.WriteLine($"[SE-TS Bridge] - Missing game client for SteamID: {state.SteamID}");
+            //    WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Missing game client for SteamID: {state.SteamID}");
             //}
         }
     }
 
     void ProcessRemovedPlayers(int numRemovedPlayers, ReadOnlySpan<byte> bytes)
     {
-        Console.WriteLine($"[SE-TS Bridge] - Removing {numRemovedPlayers} players.");
+        WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Removing {numRemovedPlayers} players.");
 
         lock (clients)
         {
@@ -718,7 +726,7 @@ public class Plugin
 
                 if (client != null && client.ClientID != 0)
                 {
-                    //Console.WriteLine($"[SE-TS Bridge] - Resetting client position for ID: {client.ClientID}.");
+                    //WriteConsole($"Resetting client position for ID: {client.ClientID}.");
 
                     client.InGameSession = false;
                     client.Position = default;
@@ -731,7 +739,7 @@ public class Plugin
 
     void ProcessNewPlayers(int numNewPlayers, ReadOnlySpan<byte> bytes)
     {
-        Console.WriteLine($"[SE-TS Bridge] - Received {numNewPlayers} new players.");
+        WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Received {numNewPlayers} new players.");
 
         for (int i = 0; i < numNewPlayers; i++)
         {
@@ -747,8 +755,11 @@ public class Plugin
 
             if (client != null)
             {
-                DebugConsole($"[SE-TS Bridge] - Matching client found for player SteamID: {id}, SteamName: {name}, ClientID: {client.ClientID}");
-                ReleaseConsole($"[SE-TS Bridge] - Matching client found for player SteamID. SteamName: {name}, ClientID: {client.ClientID}");
+#if DEBUG
+                WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Matching client found for player SteamID: {id}, SteamName: {name}, ClientID: {client.ClientID}");
+#else
+                WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Matching client found for player SteamID. SteamName: {name}, ClientID: {client.ClientID}");
+#endif
 
                 client.Position = pos;
                 client.InGameSession = true;
@@ -757,8 +768,11 @@ public class Plugin
             }
             else
             {
-                ReleaseConsole($"[SE-TS Bridge] - Missing client for player SteamID. SteamName: {name}");
-                DebugConsole($"[SE-TS Bridge] - Missing client for player SteamID: {id}, SteamName: {name}");
+#if DEBUG
+                WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Missing client for player SteamID: {id}, SteamName: {name}");
+#else
+                WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Missing client for player SteamID. SteamName: {name}");
+#endif
             }
         }
     }
@@ -842,7 +856,7 @@ public class Plugin
         bool removed = clients.Remove(client);
 
         if (!removed)
-            Console.WriteLine($"[SE-TS Bridge] - Failed to unregister client. ClientId: {client.ClientID}");
+            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to unregister client. ClientId: {client.ClientID}");
     }
 
     void RemoveAllClients()
@@ -851,11 +865,11 @@ public class Plugin
         {
             if (clients.Count == 0)
             {
-                Console.WriteLine($"[SE-TS Bridge] - Zero clients to remove.");
+                WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Zero clients to remove.");
                 return;
             }
 
-            Console.WriteLine($"[SE-TS Bridge] - Removing all {clients.Count} clients.");
+            WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Removing all {clients.Count} clients.");
 
             foreach (var client in clients)
             {
@@ -886,13 +900,13 @@ public class Plugin
 
     void RefetchTSClients()
     {
-        Console.WriteLine("[SE-TS Bridge] - Refetching client list.");
+        WriteConsoleAndLog(LogLevel.LogLevel_INFO, "Refetching client list.");
 
         RemoveAllClients();
 
         if (currentChannel == null)
         {
-            Console.WriteLine("[SE-TS Bridge] - Failed to refetch client list. Current channel is null.");
+            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, "Failed to refetch client list. Current channel is null.");
             return;
         }
 
@@ -905,19 +919,19 @@ public class Plugin
             }
         }
 
-        Console.WriteLine($"[SE-TS Bridge] - There are {clients.Count} registered clients.");
+        WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"There are {clients.Count} registered clients.");
     }
 
     unsafe void AddClientsFromChannel(Channel channel)
     {
-        Console.WriteLine($"[SE-TS Bridge] - Adding clients from channel {channel.ID}.");
+        WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Adding clients from channel {channel.ID} '{channel.Name}'.");
 
         ushort* clientList;
         var err = (Ts3ErrorType)functions.getChannelClientList(channel.ServerID, channel.ID, &clientList);
 
         if (err != Ts3ErrorType.ERROR_ok)
         {
-            Console.WriteLine($"[SE-TS Bridge] - Failed to get client list for channel {channel.ID}. Error: {err}");
+            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to get client list for channel {channel.ID}. Error: {err}");
             return;
         }
 
@@ -945,10 +959,10 @@ public class Plugin
         err = (Ts3ErrorType)functions.freeMemory(clientList);
 
         if (err != Ts3ErrorType.ERROR_ok)
-            Console.WriteLine($"[SE-TS Bridge] - Failed to free client list pointer. Error: {err}");
+            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to free client list pointer. Error: {err}");
 
         if (numAdded != 0)
-            Console.WriteLine($"[SE-TS Bridge] - Added {numAdded} clients.");
+            WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Added {numAdded} clients.");
     }
 
     void HandlePluginCommandEvent(ReadOnlySpan<byte> pluginName, ReadOnlySpan<byte> cmd, Client invokerClient)
@@ -958,7 +972,7 @@ public class Plugin
             var pluginNameStr = Encoding.UTF8.GetString(pluginName);
             var cmdStr = Encoding.UTF8.GetString(cmd);
 
-            Console.WriteLine($"[SE-TS Bridge] - Received unknown plugin command, PluginName: {pluginNameStr}, Command: {cmdStr}, InvokerClientID: {invokerClient.ClientID}, InvokerName: {invokerClient.ClientName}");
+            WriteConsoleAndLog(LogLevel.LogLevel_WARNING, $"Received unknown plugin command, PluginName: {pluginNameStr}, Command: {cmdStr}, InvokerClientID: {invokerClient.ClientID}, InvokerName: {invokerClient.ClientName}");
             return;
         }
 
@@ -979,15 +993,15 @@ public class Plugin
 
             if (!ulong.TryParse(cmd, out ulong steamID))
             {
-                Console.WriteLine($"[SE-TS Bridge] - Recieved SteamId PCE with invalid SteamID data from ClientID: {invokerClient.ClientID}.");
+                WriteConsoleAndLog(LogLevel.LogLevel_WARNING, $"Recieved SteamId PCE with invalid SteamID data from ClientID: {invokerClient.ClientID}.");
                 return;
             }
 
             invokerClient.PluginVersion = new PluginVersion(1, 2);
             invokerClient.SteamID = steamID;
 
-            ReleaseConsole($"[SE-TS Bridge] - Recieved SteamID for ClientID: {invokerClient.ClientID}.");
-            DebugConsole($"[SE-TS Bridge] - Recieved SteamID for ClientID: {invokerClient.ClientID}. SteamID: {steamID}");
+            ReleaseConsole($"Recieved SteamID for ClientID: {invokerClient.ClientID}.");
+            DebugConsole($"Recieved SteamID for ClientID: {invokerClient.ClientID}. SteamID: {steamID}");
 
             // invokerClient will not have recieved our info since it could not
             // parse it. Send it again now that its version is known.
@@ -1021,7 +1035,7 @@ public class Plugin
             }
             else
             {
-                Console.WriteLine($"[SE-TS Bridge] - Recieved PCE from ClientID: {invokerClient.ClientID} with incorrect version: {versionPart}, Minor:{m}, Patch:{p}");
+                WriteConsoleAndLog(LogLevel.LogLevel_WARNING, $"Recieved PCE from ClientID: {invokerClient.ClientID} with incorrect version: {versionPart}, Minor:{m}, Patch:{p}");
                 InvalidPCE(invokerClient.ClientID, origCmd);
                 return;
             }
@@ -1039,7 +1053,7 @@ public class Plugin
 
             if (splitIndex == -1)
             {
-                Console.WriteLine($"[SE-TS Bridge] - Recieved invalid GameInfo PCE from ClientID: {invokerClient.ClientID}");
+                WriteConsoleAndLog(LogLevel.LogLevel_WARNING, $"Recieved invalid GameInfo PCE from ClientID: {invokerClient.ClientID}");
                 return;
             }
 
@@ -1047,7 +1061,7 @@ public class Plugin
 
             if (!ulong.TryParse(part, out ulong steamID))
             {
-                Console.WriteLine($"[SE-TS Bridge] - Recieved GameInfo PCE with invalid SteamID data from ClientID: {invokerClient.ClientID}.");
+                WriteConsoleAndLog(LogLevel.LogLevel_WARNING, $"Recieved GameInfo PCE with invalid SteamID data from ClientID: {invokerClient.ClientID}.");
                 return;
             }
 
@@ -1055,29 +1069,29 @@ public class Plugin
 
             if (!int.TryParse(part, out int inGameSession))
             {
-                Console.WriteLine($"[SE-TS Bridge] - Recieved GameInfo PCE with invalid InGameSession data from ClientID: {invokerClient.ClientID}.");
+                WriteConsoleAndLog(LogLevel.LogLevel_WARNING, $"Recieved GameInfo PCE with invalid InGameSession data from ClientID: {invokerClient.ClientID}.");
                 return;
             }
 
             invokerClient.SteamID = steamID;
             invokerClient.InGameSession = inGameSession != 0;
 
-            ReleaseConsole($"[SE-TS Bridge] - Recieved GameInfo for ClientID: {invokerClient.ClientID}. Version: {version}, InGameSession: {invokerClient.InGameSession}");
-            DebugConsole($"[SE-TS Bridge] - Recieved GameInfo for ClientID: {invokerClient.ClientID}. SteamID: {steamID}, Version: {version}, InGameSession: {invokerClient.InGameSession}");
+            ReleaseConsole($"Recieved GameInfo for ClientID: {invokerClient.ClientID}. Version: {version}, InGameSession: {invokerClient.InGameSession}");
+            DebugConsole($"Recieved GameInfo for ClientID: {invokerClient.ClientID}. SteamID: {steamID}, Version: {version}, InGameSession: {invokerClient.InGameSession}");
         }
 
-        static void InvalidPCE(ushort clientID, ReadOnlySpan<byte> cmd)
+        void InvalidPCE(ushort clientID, ReadOnlySpan<byte> cmd)
         {
             var cmdStr = Encoding.UTF8.GetString(cmd);
-            Console.WriteLine($"[SE-TS Bridge] - Recieved invalid PCE from ClientID: {clientID}, Cmd: {cmdStr}");
+            WriteConsoleAndLog(LogLevel.LogLevel_WARNING, $"Recieved invalid PCE from ClientID: {clientID}, Cmd: {cmdStr}");
         }
 
-        static void InvalidPCE2(ushort clientID, ReadOnlySpan<byte> cmd, ReadOnlySpan<byte> part)
+        void InvalidPCE2(ushort clientID, ReadOnlySpan<byte> cmd, ReadOnlySpan<byte> part)
         {
             var cmdStr = Encoding.UTF8.GetString(cmd);
             var partStr = Encoding.UTF8.GetString(part);
 
-            Console.WriteLine($"[SE-TS Bridge] - Recieved invalid PCE from ClientID: {clientID}, Cmd: {cmdStr}, Part: {partStr}");
+            WriteConsoleAndLog(LogLevel.LogLevel_WARNING, $"Recieved invalid PCE from ClientID: {clientID}, Cmd: {cmdStr}, Part: {partStr}");
         }
     }
 
@@ -1178,7 +1192,7 @@ public class Plugin
         {
             if (!serverChannels.TryGetValue(channelId, out currentChannel))
             {
-                Console.WriteLine($"[SE-TS Bridge] - Failed to find current channel with ID {channelId}.");
+                WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to find current channel with ID {channelId}.");
                 return false;
             }
         }
@@ -1233,7 +1247,7 @@ public class Plugin
         Channel? parent = null;
 
         if (channelParentId != 0 && !serverChannels.TryGetValue(channelParentId, out parent))
-            Console.WriteLine($"[SE-TS Bridge] - Failed to find parent channel {channelParentId}.");
+            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to find parent channel {channelParentId}.");
 
         var channel = new Channel {
             ServerID = serverId,
@@ -1261,7 +1275,7 @@ public class Plugin
         {
             if (!serverChannels.Remove(channelId, out var channel))
             {
-                Console.WriteLine($"[SE-TS Bridge] - Channel {channelId} was missing when removing.");
+                WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Channel {channelId} was missing when removing.");
                 return;
             }
 
@@ -1279,7 +1293,7 @@ public class Plugin
         {
             if (!serverChannels.TryGetValue(channelId, out var channel))
             {
-                Console.WriteLine($"[SE-TS Bridge] - Channel {channelId} was missing when removing.");
+                WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Channel {channelId} was missing when removing.");
                 return;
             }
 
@@ -1290,7 +1304,7 @@ public class Plugin
 
             if (!serverChannels.TryGetValue(newChannelParentId, out var newParent))
             {
-                Console.WriteLine($"[SE-TS Bridge] - New parent channel {newChannelParentId} of channel {channelId} was missing.");
+                WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"New parent channel {newChannelParentId} of channel {channelId} was missing.");
                 return;
             }
 
@@ -1336,7 +1350,7 @@ public class Plugin
             }
 
             if (oldChannel == null)
-                Console.WriteLine($"[SE-TS Bridge] - Failed to find old channel {oldChannelId}");
+                WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to find old channel {oldChannelId}");
         }
 
         if (currentChannel != null)
@@ -1412,14 +1426,14 @@ public class Plugin
         {
             currentChannel = newChannel;
 
-            Console.WriteLine($"[SE-TS Bridge] - Current channel changed. NewChannelID: {newChannelID}");
+            WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Current channel changed. NewChannelID: {newChannelID}");
 
             if (newChannelID != 0)
             {
                 if (currentChannel != null)
                     OnLocalChannelChanged(oldChannelID);
                 else
-                    Console.WriteLine($"[SE-TS Bridge] - Failed to find new channel with ID {newChannelID}.");
+                    WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to find new channel with ID {newChannelID}.");
             }
 
             return;
@@ -1431,13 +1445,13 @@ public class Plugin
         {
             if (client != null)
             {
-                Console.WriteLine($"[SE-TS Bridge] - Client left server. ClientID: {clientID}, ClientName: {client.ClientName}, OldChannelID: {oldChannelID}, NewChannelID: {newChannelID}");
+                WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Client left server. ClientID: {clientID}, ClientName: {client.ClientName}, OldChannelID: {oldChannelID}, NewChannelID: {newChannelID}");
 
                 RemoveClientThreadSafe(client, resetPos: false);
             }
             else
             {
-                Console.WriteLine($"[SE-TS Bridge] - Unregistered client left server. ClientID: {clientID}, OldChannelID: {oldChannelID}, NewChannelID: {newChannelID}");
+                WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Unregistered client left server. ClientID: {clientID}, OldChannelID: {oldChannelID}, NewChannelID: {newChannelID}");
             }
 
             return;
@@ -1450,13 +1464,13 @@ public class Plugin
                 client.Channel = newChannel;
                 newChannel.ClientCount++;
 
-                Console.WriteLine($"[SE-TS Bridge] - Client joined current/subscribed channel. ClientID: {clientID}, ClientName: {client.ClientName}, OldChannelID: {oldChannelID}, NewChannelID: {newChannelID}");
+                WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Client joined current/subscribed channel. ClientID: {clientID}, ClientName: {client.ClientName}, OldChannelID: {oldChannelID}, NewChannelID: {newChannelID}");
             }
             else
             {
                 var name = GetClientName(serverConnectionHandlerID, clientID);
 
-                Console.WriteLine($"[SE-TS Bridge] - New client joined current/subscribed channel. ClientID: {clientID}, ClientName: {name}, OldChannelID: {oldChannelID}, NewChannelID: {newChannelID}");
+                WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"New client joined current/subscribed channel. ClientID: {clientID}, ClientName: {name}, OldChannelID: {oldChannelID}, NewChannelID: {newChannelID}");
 
                 client = AddClientThreadSafe(clientID, newChannel, name);
             }
@@ -1473,13 +1487,13 @@ public class Plugin
         {
             if (client != null)
             {
-                Console.WriteLine($"[SE-TS Bridge] - Client left current/subscribed channel. ClientID: {clientID}, ClientName: {client.ClientName}, OldChannelID: {oldChannelID}, NewChannelID: {newChannelID}");
+                WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Client left current/subscribed channel. ClientID: {clientID}, ClientName: {client.ClientName}, OldChannelID: {oldChannelID}, NewChannelID: {newChannelID}");
 
                 RemoveClientThreadSafe(client, resetPos: true);
             }
             else
             {
-                Console.WriteLine($"[SE-TS Bridge] - Unregistered client left current/subscribed channel. ClientID: {clientID}, OldChannelID: {oldChannelID}, NewChannelID: {newChannelID}");
+                WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Unregistered client left current/subscribed channel. ClientID: {clientID}, OldChannelID: {oldChannelID}, NewChannelID: {newChannelID}");
             }
         }
         else
@@ -1508,7 +1522,7 @@ public class Plugin
         {
             bool isWhispering = status == TalkStatus.STATUS_TALKING;
 
-            //Console.WriteLine($"[SE-TS Bridge] - Setting client {clientId} whispering state to {isWhispering}");
+            //WriteConsole($"Setting client {clientId} whispering state to {isWhispering}");
 
             if (isWhispering != client.IsWhispering)
             {
@@ -1563,7 +1577,7 @@ public class Plugin
             var err = (Ts3ErrorType)functions.logMessage((byte*)msgPtr, level, (byte*)chnPtr, logID: 0);
 
             if (err != Ts3ErrorType.ERROR_ok)
-                Console.WriteLine($"[SE-TS Bridge] - Failed to log message \"{message}\"");
+                WriteConsole($"Failed to log message \"{message}\"");
         }
         finally
         {
@@ -1576,13 +1590,13 @@ public class Plugin
 
     bool Set3DSettings(float distanceFactor, float rolloffScale)
     {
-        Console.WriteLine($"[SE-TS Bridge] - Setting system 3D settings. DistanceFactor: {distanceFactor}, RolloffScale: {rolloffScale}.");
+        WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Setting system 3D settings. DistanceFactor: {distanceFactor}, RolloffScale: {rolloffScale}.");
 
         var err = (Ts3ErrorType)functions.systemset3DSettings(currentServerId, distanceFactor, rolloffScale);
 
         if (err != Ts3ErrorType.ERROR_ok)
         {
-            Console.WriteLine($"[SE-TS Bridge] - Failed to set system 3D settings. Error: {err}");
+            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to set system 3D settings. Error: {err}");
             return false;
         }
 
@@ -1591,32 +1605,32 @@ public class Plugin
 
     unsafe void SetListener(Vector3 forward, Vector3 up)
     {
-        //Console.WriteLine($"[SE-TS Bridge] - Setting listener attribs. Forward: {forward}, Up: {up}.");
+        //WriteConsole($"Setting listener attribs. Forward: {forward}, Up: {up}.");
 
         Vector3 zeroPos = default;
 
         var err = (Ts3ErrorType)functions.systemset3DListenerAttributes(currentServerId, (TS3_VECTOR*)&zeroPos, (TS3_VECTOR*)&forward, (TS3_VECTOR*)&up);
 
         if (err != Ts3ErrorType.ERROR_ok)
-            Console.WriteLine($"[SE-TS Bridge] - Failed to set listener attribs. Error: {err}");
+            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to set listener attribs. Error: {err}");
     }
 
     unsafe void SetClientPos(ushort clientId, Vector3 position)
     {
         if (clientId == 0)
         {
-            Console.WriteLine($"[SE-TS Bridge] - Tried to set position of client ID 0.");
+            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Tried to set position of client ID 0.");
             return;
         }
 
-        //Console.WriteLine($"[SE-TS Bridge] - Setting position of client {clientId} to {position}.");
+        //WriteConsole($"Setting position of client {clientId} to {position}.");
 
         position.Z = -position.Z;
 
         var err = (Ts3ErrorType)functions.channelset3DAttributes(currentServerId, clientId, (TS3_VECTOR*)&position);
 
         if (err != Ts3ErrorType.ERROR_ok)
-            Console.WriteLine($"[SE-TS Bridge] - Failed to set client pos to {position}. Error: {err}");
+            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to set client pos to {position}. Error: {err}");
     }
 
     unsafe bool GetLocalClientAndChannelIds(ulong serverId, out ushort clientId, out ulong channelId)
@@ -1630,11 +1644,11 @@ public class Plugin
         if (err == Ts3ErrorType.ERROR_ok)
         {
             clientId = clientID;
-            Console.WriteLine($"[SE-TS Bridge] - Got client ID: {clientID}");
+            WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Got client ID: {clientID}");
         }
         else
         {
-            Console.WriteLine($"[SE-TS Bridge] - Failed to get client ID. Error: {err}");
+            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to get client ID. Error: {err}");
             return false;
         }
 
@@ -1643,12 +1657,12 @@ public class Plugin
 
         if (err != Ts3ErrorType.ERROR_ok)
         {
-            Console.WriteLine($"[SE-TS Bridge] - Failed to get channel ID. Error: {err}");
+            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to get channel ID. Error: {err}");
             return false;
         }
 
         channelId = channelID;
-        Console.WriteLine($"[SE-TS Bridge] - Got channel ID: {channelID}");
+        WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Got channel ID: {channelID}");
 
         return true;
     }
@@ -1662,7 +1676,7 @@ public class Plugin
             return true;
 
         if (err != Ts3ErrorType.ERROR_channel_invalid_id)
-            Console.Write($"[SE-TS Bridge] - Unexpected error when checkng channel exists. Error: {err}");
+            WriteConsole($"Unexpected error when checkng channel exists. Error: {err}");
 
         return false;
     }
@@ -1681,7 +1695,7 @@ public class Plugin
         err = (Ts3ErrorType)functions.freeMemory(strPtr);
 
         if (err != Ts3ErrorType.ERROR_ok)
-            Console.WriteLine($"[SE-TS Bridge] - Failed to free channel string value pointer. Error: {err}");
+            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to free channel string value pointer. Error: {err}");
 
         return err;
     }
@@ -1693,7 +1707,7 @@ public class Plugin
         if (err == Ts3ErrorType.ERROR_ok && name != null)
             return true;
 
-        Console.WriteLine($"[SE-TS Bridge] - Failed to get channel name. Error: {err}");
+        WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to get channel name. Error: {err}");
 
         return false;
     }
@@ -1705,7 +1719,7 @@ public class Plugin
         if (err == Ts3ErrorType.ERROR_ok && topic != null)
             return true;
 
-        Console.WriteLine($"[SE-TS Bridge] - Failed to get channel topic. Error: {err}");
+        WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to get channel topic. Error: {err}");
 
         return false;
     }
@@ -1717,7 +1731,7 @@ public class Plugin
 
         if (err != Ts3ErrorType.ERROR_ok)
         {
-            Console.WriteLine($"[SE-TS Bridge] - Failed to get if channel is subscribed. Error: {err}");
+            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to get if channel is subscribed. Error: {err}");
             return null;
         }
 
@@ -1731,7 +1745,7 @@ public class Plugin
 
         if (err != Ts3ErrorType.ERROR_ok)
         {
-            Console.WriteLine($"[SE-TS Bridge] - Failed to get client name. Error: {err}");
+            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to get client name. Error: {err}");
             return null;
         }
 
@@ -1739,7 +1753,7 @@ public class Plugin
         err = (Ts3ErrorType)functions.freeMemory(nameBuffer);
 
         if (err != Ts3ErrorType.ERROR_ok)
-            Console.WriteLine($"[SE-TS Bridge] - Failed to free client name pointer. Error: {err}");
+            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to free client name pointer. Error: {err}");
 
         return name;
     }
@@ -1752,7 +1766,7 @@ public class Plugin
         if (err != Ts3ErrorType.ERROR_ok)
         {
             muted = false;
-            Console.WriteLine($"[SE-TS Bridge] - Failed to get client local muting state. ClientID: {clientId}, Error: {err}");
+            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to get client local muting state. ClientID: {clientId}, Error: {err}");
             return false;
         }
 
@@ -1769,7 +1783,7 @@ public class Plugin
             var err = (Ts3ErrorType)functions.requestSendPrivateTextMsg(serverId, (byte*)ptr, clientId, null);
 
             if (err != Ts3ErrorType.ERROR_ok)
-                Console.WriteLine($"[SE-TS Bridge] - Failed to send private message to clientID {clientId}. Error: {err}");
+                WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to send private message to clientID {clientId}. Error: {err}");
         }
         finally
         {
@@ -1785,7 +1799,7 @@ public class Plugin
 
         if (err != Ts3ErrorType.ERROR_ok)
         {
-            Console.WriteLine($"[SE-TS Bridge] - Failed to mute client locally. ClientID: {clientId}, Error: {err}");
+            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to mute client locally. ClientID: {clientId}, Error: {err}");
             return false;
         }
 
@@ -1800,7 +1814,7 @@ public class Plugin
 
         if (err != Ts3ErrorType.ERROR_ok)
         {
-            Console.WriteLine($"[SE-TS Bridge] - Failed to unmute client locally. ClientID: {clientId}, Error: {err}");
+            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to unmute client locally. ClientID: {clientId}, Error: {err}");
             return false;
         }
 
@@ -1814,7 +1828,7 @@ public class Plugin
 
         if (err != Ts3ErrorType.ERROR_ok)
         {
-            Console.WriteLine($"[SE-TS Bridge] - Failed to get parent channel. Error: {err}");
+            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to get parent channel. Error: {err}");
             return null;
         }
 
@@ -1828,7 +1842,7 @@ public class Plugin
 
         if (err != Ts3ErrorType.ERROR_ok)
         {
-            Console.WriteLine($"[SE-TS Bridge] - Failed to get channel topic. Error: {err}");
+            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to get channel topic. Error: {err}");
             return null;
         }
 
@@ -1837,7 +1851,7 @@ public class Plugin
         err = (Ts3ErrorType)functions.freeMemory(strPtr);
 
         if (err != Ts3ErrorType.ERROR_ok)
-            Console.WriteLine($"[SE-TS Bridge] - Failed to free channel topic pointer. Error: {err}");
+            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to free channel topic pointer. Error: {err}");
 
         return topic;
     }
@@ -1915,7 +1929,7 @@ public class Plugin
         // The id buffer will invalidate after exiting this function.
         Unsafe.CopyBlock(instance.pluginID, id, sz);
 
-        Console.WriteLine("[SE-TS Bridge] - Registered plugin ID: " + Encoding.UTF8.GetString(charSpan));
+        instance.WriteConsoleAndLog(LogLevel.LogLevel_INFO, "Registered plugin ID: " + Encoding.UTF8.GetString(charSpan));
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_commandKeyword")]
@@ -1945,7 +1959,7 @@ public class Plugin
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onConnectStatusChangeEvent")]
     public unsafe static void ts3plugin_onConnectStatusChangeEvent(ulong serverConnectionHandlerID, int newStatus, uint errorNumber)
     {
-        //Console.WriteLine($"[SE-TS Bridge] - ConnectStatusChangeEvent. NewStatus: {newStatus}");
+        //WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"ConnectStatusChangeEvent. NewStatus: {newStatus}");
 
         var connStatus = (ConnectStatus)newStatus;
 
@@ -2066,7 +2080,7 @@ public class Plugin
 
         if (client == null)
         {
-            Console.WriteLine($"[SE-TS Bridge] - Received plugin command from unregistered client, ClientID: {invokerClientID}, InvokerName: {invokerNameStr}");
+            instance.WriteConsoleAndLog(LogLevel.LogLevel_WARNING, $"Received plugin command from unregistered client, ClientID: {invokerClientID}, InvokerName: {invokerNameStr}");
             return;
         }
 
@@ -2094,7 +2108,7 @@ public class Plugin
         }
         else
         {
-            //Console.WriteLine($"[SE-TS Bridge] - Unregistered client changed display name. ClientID: {clientID}");
+            //WriteConsole($"Unregistered client changed display name. ClientID: {clientID}");
         }
     }
 
