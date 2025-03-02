@@ -82,7 +82,9 @@ public class Plugin : IPlugin
 
     readonly Vector3 mouthOffset = new Vector3(0, 1.6f, -0.1f); // Approximate mouth offset
 
-    const ushort mpMessageId = 42691; // Picked at random, may conflict with other mods.
+    // Picked at random, may conflict with other mods.
+    const ushort MPMessageId1 = 42691;
+    const ushort MPMessageId2 = 42692;
 
     Action<ushort, byte[], ulong, bool> mpMessageHandler;
 
@@ -138,12 +140,32 @@ public class Plugin : IPlugin
 
     void MySession_OnLoading()
     {
-        MyAPIGateway.Multiplayer?.RegisterSecureMessageHandler(mpMessageId, mpMessageHandler);
+        MySession.Static.OnReady += Session_OnReady;
+
+        MyAPIGateway.Multiplayer?.RegisterSecureMessageHandler(MPMessageId1, mpMessageHandler);
+    }
+
+    void Session_OnReady()
+    {
+        if (MyAPIGateway.Multiplayer == null)
+            return;
+
+        int messageSize = sizeof(ushort) + sizeof(uint) + sizeof(uint);
+        var message = new byte[messageSize];
+        var span = message.AsSpan();
+
+        Write(ref span, MPMessageId2);
+        Write(ref span, (uint)message.Length);
+        Write(ref span, currentVersion.Packed);
+
+        MyAPIGateway.Multiplayer.SendMessageToServer(MPMessageId2, message, reliable: true);
     }
 
     void MySession_OnUnloading()
     {
-        MyAPIGateway.Multiplayer?.UnregisterSecureMessageHandler(mpMessageId, mpMessageHandler);
+        MySession.Static.OnReady -= Session_OnReady;
+
+        MyAPIGateway.Multiplayer?.UnregisterSecureMessageHandler(MPMessageId1, mpMessageHandler);
 
         if (pipeStream == null || !pipeStream.IsConnected)
             return;
@@ -237,6 +259,13 @@ public class Plugin : IPlugin
     {
         var value = MemoryMarshal.Read<T>(span);
         span = span.Slice(sizeof(T));
+        return value;
+    }
+
+    unsafe static T Read<T>(byte[] bytes, ref int offset) where T : unmanaged
+    {
+        var value = MemoryMarshal.Read<T>(bytes.AsSpan(offset));
+        offset += sizeof(T);
         return value;
     }
 

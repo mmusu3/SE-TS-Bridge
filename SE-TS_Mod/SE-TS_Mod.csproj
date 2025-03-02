@@ -30,8 +30,16 @@
     </Reference>
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="..\SharedPluginClasses\PluginVersion.cs" Link="PluginVersion.cs" />
+  </ItemGroup>
+
   <Target Name="PostBuild" AfterTargets="PostBuildEvent">
-    <Exec Command="xcopy $(MSBuildProjectDirectory)\Mod.cs &quot;%appdata%\SpaceEngineers\Mods\SE-TS_Mod\Data\Scripts\SE-TS_Mod\&quot; /y" />
+    <ItemGroup>
+      <CopySourceItems Include="Mod.cs" />
+      <CopySourceItems Include="..\SharedPluginClasses\PluginVersion.cs" />
+    </ItemGroup>
+    <Copy SourceFiles="@(CopySourceItems)" DestinationFolder="$(AppData)\SpaceEngineers\Mods\SE-TS_Mod\Data\Scripts\SE-TS_Mod" />
   </Target>
 
 </Project>
