@@ -79,6 +79,7 @@ public class Plugin : IPlugin
     NamedPipeServerStream? pipeStream;
     CancellationTokenSource pipeCancellation;
     Task? connectTask;
+    Queue<Task> sendTasks = [];
 
     readonly Vector3 mouthOffset = new Vector3(0, 1.6f, -0.1f); // Approximate mouth offset
 
@@ -289,6 +290,7 @@ public class Plugin : IPlugin
                 MyLog.Default.WriteLine("[SE-TS Bridge] Restarting connection.");
                 MyAPIGateway.Utilities?.ShowMessage("SE-TS Bridge", "Restarting connection.");
 
+                sendTasks.Clear();
                 pipeStream.Dispose();
                 currentPlayers.Clear();
                 BeginConnection();
@@ -349,15 +351,7 @@ public class Plugin : IPlugin
 
         Write(ref span, updatePacket);
 
-        try
-        {
-            pipeStream!.Write(buffer, 0, dataSize);
-            pipeStream.Flush();
-        }
-        finally
-        {
-            arrayPool.Return(buffer);
-        }
+        SendUpdate(buffer, dataSize);
     }
 
     void SendUpdate(IMyPlayerCollection playerCollection, IMySession session)
@@ -511,14 +505,47 @@ public class Plugin : IPlugin
             newPlayers.Clear();
         }
 
+        SendUpdate(buffer, dataSize);
+    }
+
+    void SendUpdate(byte[] buffer, int dataSize)
+    {
         try
         {
-            pipeStream!.Write(buffer, 0, dataSize);
+            while (sendTasks.Count > 0)
+            {
+                var t = sendTasks.Peek();
+
+                if (t.IsCompleted)
+                {
+                    sendTasks.Dequeue();
+                }
+                else if (sendTasks.Count > 2)
+                {
+                    bool done = t.Wait(100);
+
+                    if (!done)
+                    {
+                        pipeStream!.Dispose();
+                        return;
+                    }
+
+                    sendTasks.Dequeue();
+                }
+                else
+                {
+                    break;
+                }
+            }
+
+            var task = pipeStream!.WriteAsync(buffer, 0, dataSize);
+
+            sendTasks.Enqueue(task);
             pipeStream.Flush();
         }
         finally
         {
-            arrayPool.Return(buffer);
+            ArrayPool<byte>.Shared.Return(buffer);
         }
     }
 
