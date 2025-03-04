@@ -17,7 +17,7 @@ using SharedPluginClasses;
 
 namespace SEPluginForTS;
 
-public class Plugin
+public partial class Plugin
 {
     static PluginVersion currentVersion = new(4, 0);
 
@@ -253,6 +253,8 @@ public class Plugin
         AddOrPrintConsoleMessage($"Version {currentVersion} initializing.");
         LogMessage($"Version {currentVersion} initializing.", LogLevel.LogLevel_INFO, "SE-TS Bridge");
 
+        _ = CheckForUpdateAsync();
+
         currentServerId = functions.getCurrentServerConnectionHandlerID();
 
         int connectionStatus = 0;
@@ -393,7 +395,11 @@ public class Plugin
         message = "[SE-TS Bridge] - " + message;
 
         Console.WriteLine(message);
+        PrintOrQueueMessageForCurrentTab(message);
+    }
 
+    void PrintOrQueueMessageForCurrentTab(string message)
+    {
         lock (pendingConsoleMessages)
         {
             if (messageDelayComplete)
