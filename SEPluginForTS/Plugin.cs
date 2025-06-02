@@ -19,7 +19,7 @@ namespace SEPluginForTS;
 
 public partial class Plugin
 {
-    static PluginVersion currentVersion = new(4, 0);
+    static PluginVersion currentVersion = new(4, 1);
 
     // NOTE: Must be kept in sync with the project settings.
     static ReadOnlySpan<byte> DLLName => "SEPluginForTS"u8;
@@ -1077,7 +1077,7 @@ public partial class Plugin
             {
                 client.Position = default;
 
-                var pos = !isInGameSession && client.InGameSession
+                var pos = !isInGameSession && client.InGameSession && currentChannel is { IsPluginActive: true }
                     ? new Vector3(float.MaxValue)
                     : default;
 
