@@ -7,14 +7,14 @@
     <OutputPath>../Bin/TSPluginForSE</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <Platforms>x64</Platforms>
-    <Version>1.4.0</Version>
+    <Version>1.4.2</Version>
     <Nullable>enable</Nullable>
     <DefineConstants>$(DefineConstants);SE_PLUGIN</DefineConstants>
   </PropertyGroup>
 
   <PropertyGroup>
     <!-- Update to match your local SE install path. -->
-    <GameBinPath>G:\Program Files (x86)\Steam\steamapps\common\SpaceEngineers\Bin64</GameBinPath>
+    <GameBinPath>C:\Program Files (x86)\Steam\steamapps\common\SpaceEngineers\Bin64</GameBinPath>
   </PropertyGroup>
 
   <ItemGroup>

@@ -19,7 +19,7 @@ namespace SEPluginForTS;
 
 public partial class Plugin
 {
-    static PluginVersion currentVersion = new(4, 1);
+    static PluginVersion currentVersion = new(4, 2);
 
     // NOTE: Must be kept in sync with the project settings.
     static ReadOnlySpan<byte> DLLName => "SEPluginForTS"u8;
@@ -29,6 +29,9 @@ public partial class Plugin
     static readonly IntPtr PluginAuthorPtr = AllocHGlobalUTF8("Remaarn"u8);
     static readonly IntPtr PluginDescriptionPtr = AllocHGlobalUTF8("This plugin enables the use of TeamSpeak's positional audio feature with the game Space Engineers."u8);
     static readonly IntPtr CommandKeywordPtr = AllocHGlobalUTF8("setsbridge"u8);
+
+    const string logPrefix = "SE-TS Bridge";
+    const string consolePrefix = "[SE-TS Bridge] - ";
 
     static Plugin instance = new();
 
@@ -234,24 +237,25 @@ public partial class Plugin
         return (IntPtr)ptr;
     }
 
-    static void WriteConsole(string text) => Console.WriteLine("[SE-TS Bridge] - " + text);
+    static void WriteConsole(string text) => Console.WriteLine(consolePrefix + text);
 
     [Conditional("DEBUG")]
-    static void DebugConsole(string text) => Console.WriteLine("[SE-TS Bridge] - " + text);
+    static void DebugConsole(string text) => Console.WriteLine(consolePrefix + text);
 
     [Conditional("RELEASE")]
-    static void ReleaseConsole(string text) => Console.WriteLine("[SE-TS Bridge] - " + text);
+    static void ReleaseConsole(string text) => Console.WriteLine(consolePrefix + text);
 
     void WriteConsoleAndLog(LogLevel logLevel, string text)
     {
-        Console.WriteLine("[SE-TS Bridge] - " + text);
-        LogMessage(text, logLevel, "SE-TS Bridge");
+        PrintMessage(text, PrintMessageTarget.ConsoleAndLog, logLevel);
     }
 
     unsafe void Init()
     {
         AddOrPrintConsoleMessage($"Version {currentVersion} initializing.");
-        LogMessage($"Version {currentVersion} initializing.", LogLevel.LogLevel_INFO, "SE-TS Bridge");
+        LogMessage($"Version {currentVersion} initializing.", LogLevel.LogLevel_INFO, logPrefix);
+
+        VerifyDllName();
 
         _ = CheckForUpdateAsync();
 
@@ -272,6 +276,99 @@ public partial class Plugin
         runningTask = UpdateLoop(cancellationTokenSource.Token);
     }
 
+    // TeamSpeak uses the DLL name to identify command events, so it needs to match what is expected.
+    void VerifyDllName()
+    {
+        unsafe
+        {
+            int bufferSize = 256;
+            var path = GetCurrentDllPath(bufferSize, out int error);
+
+            if (path == null && error == 0x7A /*ERROR_INSUFFICIENT_BUFFER*/)
+            {
+                bufferSize = 1024;
+                path = GetCurrentDllPath(bufferSize, out error);
+            }
+
+            if (path == null)
+            {
+                PrintMessage($"Failed to get current DLL path. Error code: {error}", PrintMessageTarget.All, LogLevel.LogLevel_ERROR);
+                return;
+            }
+
+            var pluginName = Path.GetFileNameWithoutExtension(path);
+            var expectedName = Encoding.UTF8.GetString(DLLName);
+
+            if (pluginName == expectedName)
+                return;
+
+            PrintMessage($"Plugin DLL file name does not match expected name '{expectedName}'. Actual: '{pluginName}'", PrintMessageTarget.ConsoleAndLog, LogLevel.LogLevel_ERROR);
+            PrintMessage($"ERROR: The name of the plugin DLL file is wrong. SE-TS Bridge will not work properly unless the file is named '{expectedName}.dll'", PrintMessageTarget.UI);
+        }
+    }
+
+    string? GetCurrentDllPath(int bufferSize, out int error)
+    {
+        unsafe
+        {
+            error = 0;
+
+            char* pathBuffer = stackalloc char[bufferSize];
+            int pathSize = (int)GetCurrentDLLPath(pathBuffer, (uint)bufferSize);
+
+            if (pathSize == bufferSize)
+            {
+                error = Marshal.GetLastWin32Error();
+
+                if (error == 0x7A /*ERROR_INSUFFICIENT_BUFFER*/)
+                    return null;
+            }
+
+            if (pathSize == 0)
+                return null;
+
+            var path = new string(pathBuffer, 0, pathSize);
+
+            return path;
+        }
+    }
+
+    static unsafe uint GetCurrentDLLPath(char* pathBuffer, uint bufferSize)
+    {
+        unsafe
+        {
+            const uint GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT = 0x00000002;
+            const uint GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS = 0x00000004;
+
+            uint flags = GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT;
+
+            delegate*<char*, uint, uint> address = &GetCurrentDLLPath;
+            nint hModule = 0;
+
+            if (GetModuleHandleExA(flags, (byte*)address, &hModule) == 0)
+            {
+                Console.WriteLine($"{consolePrefix} ERROR: Failed to get module handle. Error code: {Marshal.GetLastWin32Error()}");
+                return 0;
+            }
+
+            uint pathSize = GetModuleFileNameW(hModule, pathBuffer, bufferSize);
+
+            if (pathSize == 0)
+            {
+                Console.WriteLine($"{consolePrefix} ERROR: Failed to get module file name. Error code: {Marshal.GetLastWin32Error()}");
+                return 0;
+            }
+
+            return pathSize;
+
+            [DllImport("kernel32.dll", SetLastError = true)]
+            static extern int GetModuleHandleExA(uint dwFlags, byte* lpModuleName, nint* phModule);
+
+            [DllImport("kernel32.dll", SetLastError = true)]
+            static extern uint GetModuleFileNameW(nint hModule, char* lpFilename, uint nSize);
+        }
+    }
+
     void LoadSettingsFile()
     {
         remoteComputerName = "."; // Default to local computer
@@ -280,8 +377,15 @@ public partial class Plugin
         var settingsFolderPath = Path.Combine(appDataPath, "TS3Client", "plugins", "SEPluginForTS");
         var settingsFilePath = Path.Combine(settingsFolderPath, "settings.txt");
 
+        WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Looking for settings file at location: {settingsFilePath}");
+
         if (!File.Exists(settingsFilePath))
+        {
+            WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"No settings file found.");
             return;
+        }
+
+        WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Settings file was found.");
 
         string? settingsText;
 
@@ -292,7 +396,7 @@ public partial class Plugin
         catch (Exception ex)
         {
             settingsText = null;
-            AddOrPrintConsoleMessage($"Failed to read settings file. {ex}");
+            PrintMessage($"Failed to read settings file. {ex}", PrintMessageTarget.All);
         }
 
         if (settingsText != null)
@@ -302,11 +406,11 @@ public partial class Plugin
             if (parts.Length == 2 && parts[0] == "RemotePCName")
             {
                 remoteComputerName = parts[1];
-                AddOrPrintConsoleMessage($"Assigning '{remoteComputerName}' as remote PC name.");
+                PrintMessage($"Assigning '{remoteComputerName}' as remote PC name.", PrintMessageTarget.All);
             }
             else
             {
-                AddOrPrintConsoleMessage("Invalid settings file.");
+                PrintMessage("Invalid settings file.", PrintMessageTarget.All);
             }
         }
     }
@@ -390,12 +494,43 @@ public partial class Plugin
         }
     }
 
+    [Flags]
+    enum PrintMessageTarget
+    {
+        None = 0,
+        Console = 1,
+        Log = 2,
+        UI = 4,
+
+        All = Console | Log | UI,
+        ConsoleAndLog = Console | Log,
+    }
+
+    void PrintMessage(string message, PrintMessageTarget targets, LogLevel logLevel = LogLevel.LogLevel_INFO)
+    {
+        if ((targets & PrintMessageTarget.Log) != 0)
+            LogMessage(message, logLevel, logPrefix);
+
+        if ((targets & ~PrintMessageTarget.Log) == 0)
+            return;
+
+        var prefixedMessage = consolePrefix + message;
+
+        if ((targets & PrintMessageTarget.Console) != 0)
+        {
+            if (logLevel != LogLevel.LogLevel_INFO)
+                Console.Error.WriteLine($"{consolePrefix}{logLevel.ToString()["LogLevel_".Length..]} {message}");
+            else
+                Console.WriteLine(prefixedMessage);
+        }
+
+        if ((targets & PrintMessageTarget.UI) != 0)
+            PrintOrQueueMessageForCurrentTab(prefixedMessage);
+    }
+
     void AddOrPrintConsoleMessage(string message)
     {
-        message = "[SE-TS Bridge] - " + message;
-
-        Console.WriteLine(message);
-        PrintOrQueueMessageForCurrentTab(message);
+        PrintMessage(message, PrintMessageTarget.Console | PrintMessageTarget.UI);
     }
 
     void PrintOrQueueMessageForCurrentTab(string message)
@@ -424,7 +559,9 @@ public partial class Plugin
     async Task UpdateLoop(CancellationToken cancellationToken)
     {
         // Messages don't show if done while TS is starting up.
-        _ = Task.Delay(5000, cancellationToken).ContinueWith(t => PrintPendingConsoleMessages(), cancellationToken);
+        const int uiStartupMessageDelay = 3000;
+
+        _ = Task.Delay(uiStartupMessageDelay, cancellationToken).ContinueWith(t => PrintPendingConsoleMessages(), cancellationToken);
 
         waitForPipe:
         while (pipeStream == null)
@@ -470,7 +607,7 @@ public partial class Plugin
                 case UpdateResult.WrongVersion:
                     var msg = $"Plugin communication failed. {result.Error}";
                     WriteConsoleAndLog(LogLevel.LogLevel_WARNING, msg);
-                    PrintMessageToCurrentTab("[SE-TS Bridge] - " + msg);
+                    PrintMessageToCurrentTab(consolePrefix + msg);
                     break;
                 case UpdateResult.Corrupt:
                     WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Update failed with result {result.Result}. {result.Error}");
@@ -507,7 +644,7 @@ public partial class Plugin
 
         await pipeStream.DisposeAsync().ConfigureAwait(false);
 
-        PrintMessageToCurrentTab("[SE-TS Bridge] - Closed connection to Space Engineers.");
+        PrintMessageToCurrentTab(consolePrefix + "Closed connection to Space Engineers.");
 
         CreatePipe();
 
@@ -1217,8 +1354,14 @@ public partial class Plugin
             WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Added {numAdded} clients.");
     }
 
-    void HandlePluginCommandEvent(ReadOnlySpan<byte> pluginName, ReadOnlySpan<byte> cmd, Client invokerClient)
+    void HandlePluginCommandEvent(ReadOnlySpan<byte> pluginName, ReadOnlySpan<byte> cmd, Client? invokerClient)
     {
+        if (invokerClient == null)
+        {
+            // Self sent command.
+            return;
+        }
+
         if (!cmd.StartsWith("TSSE"u8))
         {
             var pluginNameStr = Encoding.UTF8.GetString(pluginName);
@@ -2480,11 +2623,15 @@ public partial class Plugin
         if (serverConnectionHandlerID != instance.currentServerId)
             return;
 
+        var nameUtf8 = MemoryMarshal.CreateReadOnlySpanFromNullTerminated(pluginName);
+        var cmd = MemoryMarshal.CreateReadOnlySpanFromNullTerminated(pluginCommand);
+
         // Commands can get sent to yourself
         if (invokerClientID == instance.localClientId)
+        {
+            instance.HandlePluginCommandEvent(nameUtf8, cmd, null);
             return;
-
-        var nameUtf8 = MemoryMarshal.CreateReadOnlySpanFromNullTerminated(pluginName);
+        }
 
         if (!nameUtf8.SequenceEqual(DLLName))
             return;
@@ -2500,8 +2647,6 @@ public partial class Plugin
             instance.WriteConsoleAndLog(LogLevel.LogLevel_WARNING, $"Received plugin command from unregistered client, ClientID: {invokerClientID}, InvokerName: {invokerNameStr}");
             return;
         }
-
-        var cmd = MemoryMarshal.CreateReadOnlySpanFromNullTerminated(pluginCommand);
 
         if (cmd.Length != 0)
             instance.HandlePluginCommandEvent(nameUtf8, cmd, client);

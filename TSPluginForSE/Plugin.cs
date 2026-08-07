@@ -24,7 +24,7 @@ namespace TSPluginForSE;
 
 public class Plugin : IPlugin
 {
-    static PluginVersion currentVersion = new(4, 1);
+    static PluginVersion currentVersion = new(4, 2);
 
     internal class PlayerInfo
     {
