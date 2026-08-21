@@ -1,6 +1,5 @@
 # SE-TS-Bridge
-Plugins for Space Engineers and TeamSpeak to enable positional audio features.  
-This project has not had extensive development and so it is lacking some functionality. Please report any crashing or freezing issues.  
+This project contains paired plugins for Space Engineers and [TeamSpeak 3](https://www.teamspeak.com/en/downloads?product=ts3) to enable positional voice chat features.  
 
 ## Installation
 First download and unzip the `SE-TS_Bridge.zip` file from the latest release here https://github.com/mmusu3/SE-TS-Bridge/releases  
