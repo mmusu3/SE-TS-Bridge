@@ -47,6 +47,7 @@ namespace SETSMod
                 Player = player;
                 Character = player.Character;
                 SteamId = player.SteamUserId;
+                IdentityId = player.IdentityId;
                 RelayedBroadcasters = new HashSet<MyDataBroadcaster>();
                 RelayedReceivers = new HashSet<MyDataReceiver>();
                 VisibleBroadcasters = new HashSet<MyDataBroadcaster>();
@@ -76,7 +77,7 @@ namespace SETSMod
 
             MyLog.Default.WriteLineAndConsole("[SE-TS Mod] LoadData");
 
-            MyAPIGateway.Multiplayer.RegisterSecureMessageHandler(MPMessageId2, MPMessageHandler);
+            MyAPIGateway.Multiplayer.RegisterSecureMessageHandler(MPMessageId2, MPMessageServerHandler);
         }
 
         protected override void UnloadData()
@@ -86,15 +87,12 @@ namespace SETSMod
 
             MyLog.Default.WriteLineAndConsole("[SE-TS Mod] UnloadData");
 
-            MyAPIGateway.Multiplayer.UnregisterSecureMessageHandler(MPMessageId2, MPMessageHandler);
+            MyAPIGateway.Multiplayer.UnregisterSecureMessageHandler(MPMessageId2, MPMessageServerHandler);
         }
 
-        void MPMessageHandler(ushort handlerId, byte[] message, ulong steamId, bool fromServer)
+        void MPMessageServerHandler(ushort handlerId, byte[] message, ulong steamId, bool fromServer)
         {
             // If the message does not match what is expected there might be another mod using the same handlerId.
-
-            if (!fromServer)
-                return; // Should never get messages from clients
 
             const int headerSize = sizeof(ushort) + sizeof(uint) + sizeof(uint);
 
@@ -184,7 +182,7 @@ namespace SETSMod
 
         int UpdatePlayerTracking()
         {
-            MyAPIGateway.Players.GetPlayers(playerList);
+            MyAPIGateway.Players.GetPlayers(playerList, p => !p.IsBot);
 
             foreach (var player in playerList)
                 playerSet.Add(player);
@@ -291,8 +289,11 @@ namespace SETSMod
             var receiver = player.Character.Components.Get<MyDataReceiver>();
             var broadcaster = player.Character.Components.Get<MyDataBroadcaster>();
 
-            antennaSystemHelper.GetAllRelayedBroadcasters(broadcaster, player.IdentityId, player.RelayedBroadcasters);
-            antennaSystemHelper.GetAllRelayedReceivers(receiver, player.IdentityId, player.RelayedReceivers);
+            if (broadcaster != null)
+                antennaSystemHelper.GetAllRelayedBroadcasters(broadcaster, player.IdentityId, player.RelayedBroadcasters);
+
+            if (receiver != null)
+                antennaSystemHelper.GetAllRelayedReceivers(receiver, player.IdentityId, player.RelayedReceivers);
 
             foreach (var r in player.RelayedReceivers)
             {

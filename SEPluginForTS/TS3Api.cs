@@ -8,7 +8,7 @@ using anyID = System.UInt16;
 public unsafe struct TS3Functions
 {
     // NOTE: fixed buffers don't support pointer sized types. So this is only valid in x64 mode.
-    fixed ulong pointers[226];
+    fixed ulong pointers[230];
 
 #pragma warning disable IDE1006 // Naming Styles
     public uint getClientLibVersion(byte** result) => ((delegate*<byte**, uint>)pointers[0])(result);
@@ -144,7 +144,7 @@ public unsafe struct TS3Functions
     public uint requestServerVariables(ulong serverConnectionHandlerID) => ((delegate*<ulong, uint>)pointers[100])(serverConnectionHandlerID);
 
     /* Connection info */
-    public uint getConnectionStatus(ulong serverConnectionHandlerID, int* result) => ((delegate*<ulong, int*, uint>)pointers[101])(serverConnectionHandlerID, result);
+    public uint getConnectionStatus(ulong serverConnectionHandlerID, ConnectStatus* result) => ((delegate*<ulong, ConnectStatus*, uint>)pointers[101])(serverConnectionHandlerID, result);
     public uint getConnectionVariableAsulong(ulong serverConnectionHandlerID, anyID clientID, nint flag, ulong* result) => ((delegate*<ulong, anyID, nint, ulong*, uint>)pointers[102])(serverConnectionHandlerID, clientID, flag, result);
     public uint getConnectionVariableAsDouble(ulong serverConnectionHandlerID, anyID clientID, nint flag, double* result) => ((delegate*<ulong, anyID, nint, double*, uint>)pointers[103])(serverConnectionHandlerID, clientID, flag, result);
     public uint getConnectionVariableAsString(ulong serverConnectionHandlerID, anyID clientID, nint flag, byte** result) => ((delegate*<ulong, anyID, nint, byte**, uint>)pointers[104])(serverConnectionHandlerID, clientID, flag, result);
@@ -300,7 +300,7 @@ public unsafe struct TS3Functions
     public uint getServerGroupIDByName(ulong serverConnectionHandlerID, /*const */byte* groupName, uint* result) => ((delegate*<ulong, byte*, uint*, uint>)pointers[226])(serverConnectionHandlerID, groupName, result);
     public uint getServerGroupNameByID(ulong scHandlerID, uint groupID, byte* result, nint max_len) => ((delegate*<ulong, uint, byte*, nint, uint>)pointers[227])(scHandlerID, groupID, result, max_len);
     public uint getChannelGroupIDByName(ulong serverConnectionHandlerID, /*const */byte* groupName, uint* result) => ((delegate*<ulong, byte*, uint*, uint>)pointers[228])(serverConnectionHandlerID, groupName, result);
-    public uint getChannelGroupNameByID(ulong scHandlerID, uint groupID, byte* result, nint max_len) => ((delegate*<ulong, byte*, nint, uint>)pointers[229])(scHandlerID, result, max_len);
+    public uint getChannelGroupNameByID(ulong scHandlerID, uint groupID, byte* result, nint max_len) => ((delegate*<ulong, uint, byte*, nint, uint>)pointers[229])(scHandlerID, groupID, result, max_len);
 #pragma warning restore IDE1006 // Naming Styles
 }
 
@@ -329,7 +329,7 @@ public enum Visibility
     LEAVE_VISIBILITY
 }
 
-enum ConnectStatus
+public enum ConnectStatus
 {
     /// <summary>There is no activity to the server, this is the default value.</summary>
     STATUS_DISCONNECTED = 0,
@@ -350,7 +350,7 @@ enum ConnectStatus
     STATUS_CONNECTION_ESTABLISHED,
 }
 
-enum TalkStatus
+public enum TalkStatus
 {
     /// <summary>client is not talking</summary>
     STATUS_NOT_TALKING = 0,

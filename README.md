@@ -18,22 +18,22 @@ Downloads and installation instructions for the launcher can be found through th
 * Next, go to your Pulsar install directory and open or create the `Legacy` folder there. Inside that you need to open or create the folder named `Local`.  
 * Now copy the `TSPluginForSE.dll` file from the unziped release into the `Pulsar/Legacy/Local` folder.  
 * Launch SE using Pulsar (with `Legacy.exe` or `Interim.exe`) and click the Plugins button on the main menu.  
-* Click the `Add Plugin` button near the bottom center of the menu (looks like a plus sign) and then serch for `TSPluginForSE`.  
+* Click the `Add Plugin` button near the bottom center of the menu (looks like a plus sign) and then search for `TSPluginForSE`.  
 * Mark the checkbox on `TSPluginForSE.dll` and then close the `Plugin List` menu.  
 * Click the `Apply` button and confirm the restart when prompted.  
-* Once the game has restarted the plugin for SE should now be ready for use.  
+* Once the game has restarted, the plugin for SE should now be ready for use.  
 
 #### TeamSpeak Plugin
-* This plugin will only work with the 64bit version of TeamSpeak so be sure you have that instead of the 32bit version.  
+* This plugin will only work with the 64bit version of TeamSpeak, so be sure you have that one and not the 32bit version.  
 * To install the TS plugin, first copy the `SEPluginForTS.dll` file into your TeamSpeak plugins folder which can usually be found at `%appdata%/TS3Client/plugins`.  
 * To make sure the plugin is enabled, go to TeamSpeak `Options->Addons->Plugins` and ensure the `SE-TS Bridge` plugin is enabled there (the button should say Enabled).  
 * To enable positional audio support go to TeamSpeak `Options->Playback` and ensure the `Always set clients 3D positions when available` checkbox is ticked.  
 
-When updating either plugin, first close the respective application before re-copying the plugin files.  
+When updating the plugins, first close the respective application before re-copying the plugin files.  
 
 #### Usage
-To enable the positional audio features the plugin requires that a TeamSpeak channel be designated as an in-game channel.
-This is done by setting the channel topic text to `sets-ingame` The text must match exactly, no extra spaces. This alone is the most basic setup, the plugin also offers more control over sub-channels.  
+To enable the positional audio features, the plugin requires that a TeamSpeak channel be designated as an in-game channel.
+This is done by setting the channel topic text to `sets-ingame` The text must match exactly, no extra spaces. This on its own is the most basic setup, but the plugin also offers more control over sub-channels.  
 There are 3 other types of channel that are designated in the same way by setting the channel topic. They are:
 * `sets-autocomms`
 * `sets-alwaysconnected`
@@ -45,17 +45,17 @@ These options are used for sub-channels of the designated `sets-ingame` channel.
 This option will disable voice spatialization only when players have an antenna connection between them (requires the companion mod), and will fall-back to being spatialized when the connection is lost. Clients in other sub-channels under the main ingame channel will still be spatialized.
 
 #### sets-alwaysconnected
-This option is like the previous one except it always disable voice spatialization for the clients in that one channel regardless of antenna connection. 
+This option is like the previous one except it always disables voice spatialization for the clients in that one channel regardless of antenna connection. 
 
 #### sets-crosscomms
-This option will disable voice spatialization within it and between sub-channels of this channel but only when players have an antenna connection between them. It will fall-back to spatialized when the connection is lost. Clients in other sub-channels under the main ingame channel will still be spatialized.
+This option will disable voice spatialization within it and between sub-channels of this channel, but only when players have an antenna connection between them. It will fall-back to spatialized when the connection is lost. Clients in other sub-channels under the main ingame channel will still be spatialized.
 
-Any channel not designated as one of the above options will function as normal like without the plugin.
+Any channel not designated as one of the above options will function like normal as if not using the plugin.
 
-To enable speaking across channels the plugin uses TeamSpeaks whisper functionality. By default TeamSpeak plays a sound when you receive a whisper from someone. When using the sub-channel features of this plugin it is recommended to disable the whisper notification sound and popup by unckecing the two checkboxes in `Tools->Options->Whisper->Settings for Received Whispers`.
+To enable speaking across channels, the plugin uses TeamSpeaks whisper functionality. By default TeamSpeak plays a sound when you receive a whisper from someone. When using the sub-channel features of this plugin it is recommended to disable the whisper notification sound and popup by unchecking the two checkboxes in `Tools->Options->Whisper->Settings for Received Whispers`.
 
 ##### Commands
-The TeamSpeak plugin has a couple of chat based commands to control the audio settings.
+The TeamSpeak plugin has a few chat-based commands to control the audio settings.
 
 * `/setsbridge distancescale (x)`
 * `/setsbridge distancefalloff (x)`
@@ -71,5 +71,5 @@ Default values:
 These commands may be restricted or removed in future releases.
 
 #### Space Engineers Server Mod
-There is an optional server-side mod for SE that works togther with the SE plugin to properly enable the functionality of the autocomms and crosscomms channel types. It restrict non-spatialized communication to only be available between players within antenna range including relayed connections.  
+There is an optional server-side mod for SE that works together with the SE plugin to properly enable the functionality of the autocomms and crosscomms channel types. It restricts non-spatialized communication to only be available between players within antenna range, including relayed connections.  
 The mod can be found here: https://steamcommunity.com/sharedfiles/filedetails/?id=2935694294

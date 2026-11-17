@@ -3,6 +3,7 @@ using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.IO;
 using System.IO.Pipes;
 using System.Linq;
@@ -19,16 +20,16 @@ namespace SEPluginForTS;
 
 public partial class Plugin
 {
-    static PluginVersion currentVersion = new(4, 2);
+    static PluginVersion currentVersion = new(4, 3);
 
     // NOTE: Must be kept in sync with the project settings.
     static ReadOnlySpan<byte> DLLName => "SEPluginForTS"u8;
 
-    static readonly IntPtr PluginNamePtr = AllocHGlobalUTF8("SE-TS Bridge"u8);
+    static readonly IntPtr PluginNamePtr = NativeAllocUTF8("SE-TS Bridge"u8);
     static readonly IntPtr PluginVersionPtr = AllocVersionStringUTF8();
-    static readonly IntPtr PluginAuthorPtr = AllocHGlobalUTF8("Remaarn"u8);
-    static readonly IntPtr PluginDescriptionPtr = AllocHGlobalUTF8("This plugin enables the use of TeamSpeak's positional audio feature with the game Space Engineers."u8);
-    static readonly IntPtr CommandKeywordPtr = AllocHGlobalUTF8("setsbridge"u8);
+    static readonly IntPtr PluginAuthorPtr = NativeAllocUTF8("Remaarn"u8);
+    static readonly IntPtr PluginDescriptionPtr = NativeAllocUTF8("This plugin enables the use of TeamSpeak's positional audio feature with the game Space Engineers."u8);
+    static readonly IntPtr CommandKeywordPtr = NativeAllocUTF8("setsbridge"u8);
 
     const string logPrefix = "SE-TS Bridge";
     const string consolePrefix = "[SE-TS Bridge] - ";
@@ -207,7 +208,7 @@ public partial class Plugin
         }
     }
 
-    static unsafe IntPtr AllocHGlobalUTF8(ReadOnlySpan<byte> s)
+    static unsafe IntPtr NativeAllocUTF8(ReadOnlySpan<byte> s)
     {
         void* mem = NativeMemory.Alloc((uint)s.Length + 1);
 
@@ -229,10 +230,11 @@ public partial class Plugin
 
         buffer[bytesWritten] = 0;
 
-        void* ptr = NativeMemory.Alloc((uint)bytesWritten + 1);
+        int allocSize = bytesWritten + 1;
+        void* ptr = NativeMemory.Alloc((uint)allocSize);
+        var destSpan = new Span<byte>(ptr, allocSize);
 
-        buffer.Slice(0, bytesWritten).CopyTo(new Span<byte>(ptr, 32));
-        ((byte*)ptr)[bytesWritten] = 0;
+        buffer.Slice(0, allocSize).CopyTo(destSpan);
 
         return (IntPtr)ptr;
     }
@@ -261,18 +263,18 @@ public partial class Plugin
 
         currentServerId = functions.getCurrentServerConnectionHandlerID();
 
-        int connectionStatus = 0;
+        var connectionStatus = ConnectStatus.STATUS_DISCONNECTED;
         var err = (Ts3ErrorType)functions.getConnectionStatus(currentServerId, &connectionStatus);
 
-        if (err == Ts3ErrorType.ERROR_ok && connectionStatus == 1 && UpdateLocalClientIdAndChannel(currentServerId))
+        if (err == Ts3ErrorType.ERROR_ok && connectionStatus == ConnectStatus.STATUS_CONNECTION_ESTABLISHED && UpdateLocalClientIdAndChannel(currentServerId))
         {
             Set3DSettings(distanceScale, 1);
             FetchTSClients();
         }
 
         LoadSettingsFile();
-        CreatePipe();
 
+        cancellationTokenSource = new CancellationTokenSource();
         runningTask = UpdateLoop(cancellationTokenSource.Token);
     }
 
@@ -421,7 +423,6 @@ public partial class Plugin
 
         const PipeDirection direction = PipeDirection.In;
 
-        cancellationTokenSource = new CancellationTokenSource();
         pipeStream = new NamedPipeClientStream(remoteComputerName, "09C842DD-F683-4798-A95F-88B0981265BE", direction, PipeOptions.Asynchronous);
     }
 
@@ -429,35 +430,45 @@ public partial class Plugin
     {
         WriteConsoleAndLog(LogLevel.LogLevel_INFO, "Disposing.");
 
-        cancellationTokenSource.Cancel();
-
         try
         {
-            runningTask.Wait(1000);
+            cancellationTokenSource.Cancel();
+
+            try
+            {
+                bool done = runningTask.Wait(1000);
+
+                if (!done)
+                    WriteConsoleAndLog(LogLevel.LogLevel_CRITICAL, "Update loop hung during plugin dispose.");
+            }
+            catch (AggregateException ex) when (ex.InnerException is TaskCanceledException) { }
+
+            pipeStream?.Dispose();
+
+            whisperChannels.Clear();
+            whisperClients.Clear();
+
+            lock (clients)
+            {
+                foreach (var item in clients)
+                    SetClientPos(item.ClientID, default);
+
+                clients.Clear();
+            }
+
+            lock (serverChannels)
+                serverChannels.Clear();
+
+            currentServerId = 0;
+            localClientId = 0;
+            currentChannel = null;
+
+            WriteConsoleAndLog(LogLevel.LogLevel_INFO, "Disposed.");
         }
-        catch (AggregateException ex) when (ex.InnerException is TaskCanceledException) { }
-
-        pipeStream?.Dispose();
-
-        whisperChannels.Clear();
-        whisperClients.Clear();
-
-        lock (clients)
+        catch (Exception ex)
         {
-            foreach (var item in clients)
-                SetClientPos(item.ClientID, default);
-
-            clients.Clear();
+            WriteConsoleAndLog(LogLevel.LogLevel_CRITICAL, $"Exception while disposing plugin: {ex}");
         }
-
-        lock (serverChannels)
-            serverChannels.Clear();
-
-        currentServerId = 0;
-        localClientId = 0;
-        currentChannel = null;
-
-        WriteConsoleAndLog(LogLevel.LogLevel_INFO, "Disposed.");
     }
 
     async ValueTask ConnectPipe(CancellationToken cancellationToken)
@@ -471,8 +482,7 @@ public partial class Plugin
                 pipeStream!.Connect(timeout: 1/*ms*/);
                 return;
             }
-            catch (TimeoutException) { }
-            catch (IOException ioEx) when ((uint)ioEx.HResult == 0x80070035)
+            catch (IOException ioEx) when ((uint)ioEx.HResult == 0x80070035) // The network path was not found.
             {
                 if (remoteComputerName != ".")
                     AddOrPrintConsoleMessage($"Failed to connect to remote computer '{remoteComputerName}'");
@@ -483,14 +493,16 @@ public partial class Plugin
                 pipeStream = null;
                 return;
             }
-
-            if (printWaitMessage)
+            catch (TimeoutException)
             {
-                AddOrPrintConsoleMessage("Waiting for game connection.");
-                printWaitMessage = false;
-            }
+                if (printWaitMessage)
+                {
+                    AddOrPrintConsoleMessage("Waiting for game connection.");
+                    printWaitMessage = false;
+                }
 
-            await Task.Delay(TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
+                await Task.Delay(TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 
@@ -563,27 +575,28 @@ public partial class Plugin
 
         _ = Task.Delay(uiStartupMessageDelay, cancellationToken).ContinueWith(t => PrintPendingConsoleMessages(), cancellationToken);
 
-        waitForPipe:
-        while (pipeStream == null)
+        connect:;
+
+        try
         {
-            try
+            CreatePipe();
+
+            await ConnectPipe(cancellationToken).ConfigureAwait(false);
+
+            if (pipeStream == null)
             {
-                await Task.Delay(TimeSpan.FromSeconds(20), cancellationToken);
-            }
-            catch (AggregateException ex) when (ex.InnerException is TaskCanceledException)
-            {
-                return;
+                await Task.Delay(TimeSpan.FromSeconds(20), cancellationToken).ConfigureAwait(false);
+
+                goto connect;
             }
         }
-
-        connect:
-        await ConnectPipe(cancellationToken).ConfigureAwait(false);
+        catch (Exception ex) when (ex is TaskCanceledException or OperationCanceledException)
+        {
+            return;
+        }
 
         if (cancellationToken.IsCancellationRequested)
             return;
-
-        if (pipeStream == null)
-            goto waitForPipe;
 
         AddOrPrintConsoleMessage("Established connection to Space Engineers plugin.");
 
@@ -644,9 +657,9 @@ public partial class Plugin
 
         await pipeStream.DisposeAsync().ConfigureAwait(false);
 
-        PrintMessageToCurrentTab(consolePrefix + "Closed connection to Space Engineers.");
+        pipeStream = null;
 
-        CreatePipe();
+        PrintMessageToCurrentTab(consolePrefix + "Closed connection to Space Engineers.");
 
         goto connect;
     }
@@ -663,8 +676,10 @@ public partial class Plugin
     async ValueTask<(UpdateResult Result, string? Error)> Update(CancellationToken cancellationToken)
     {
         using var headerBuffer = memPool.Rent(GameUpdatePacket.Size);
-        var headerMemory = headerBuffer.Memory;
-        int bytes = await pipeStream!.ReadAsync(headerMemory.Slice(0, GameUpdatePacket.Size), cancellationToken).ConfigureAwait(false);
+        var headerMemory = headerBuffer.Memory.Slice(0, GameUpdatePacket.Size);
+
+        int bytes = await pipeStream!.ReadAtLeastAsync(headerMemory, GameUpdatePacket.Size,
+            throwOnEndOfStream: false, cancellationToken).ConfigureAwait(false);
 
         if (cancellationToken.IsCancellationRequested)
             return (UpdateResult.Canceled, null);
@@ -727,6 +742,23 @@ public partial class Plugin
         if (gameUpdate.PlayerCount == 0 && gameUpdate.RemovedPlayerCount == 0 && gameUpdate.NewPlayerCount == 0)
             return (UpdateResult.OK, null);
 
+        // Sanity check update values.
+        const int maxPlayerCount = 1000;
+
+        if (!InBounds(gameUpdate.PlayerCount, 0, maxPlayerCount)
+            || !InBounds(gameUpdate.RemovedPlayerCount, 0, maxPlayerCount)
+            || !InBounds(gameUpdate.NewPlayerCount, 0, maxPlayerCount))
+        {
+            return (UpdateResult.Corrupt, $"Invalid player counts. PlayerCount:{gameUpdate.PlayerCount}, RemovedPlayerCount:{gameUpdate.RemovedPlayerCount}, NewPlayerCount:{gameUpdate.NewPlayerCount}");
+        }
+
+        const int maxNewPlayerByteLength = 1024 * 256; // 256 KB
+
+        if (!InBounds(gameUpdate.NewPlayerByteLength, 0, maxNewPlayerByteLength))
+            return (UpdateResult.Corrupt, $"Invalid new player byte length:{gameUpdate.NewPlayerByteLength}");
+
+        static bool InBounds(int value, int min, int max) => value >= min && value <= max;
+
         int expectedBytes = gameUpdate.PlayerCount * ClientGameState.Size
             + gameUpdate.RemovedPlayerCount * sizeof(ulong)
             + gameUpdate.NewPlayerByteLength;
@@ -734,7 +766,7 @@ public partial class Plugin
         using var memBuffer = memPool.Rent(expectedBytes);
         var memory = memBuffer.Memory.Slice(0, expectedBytes);
 
-        bytes = await pipeStream.ReadAsync(memory, cancellationToken).ConfigureAwait(false);
+        bytes = await pipeStream.ReadAtLeastAsync(memory, expectedBytes, throwOnEndOfStream: false, cancellationToken).ConfigureAwait(false);
 
         if (cancellationToken.IsCancellationRequested)
             return (UpdateResult.Canceled, null);
@@ -758,7 +790,9 @@ public partial class Plugin
 
         if (gameUpdate.NewPlayerCount != 0)
         {
-            ProcessNewPlayers(gameUpdate.NewPlayerCount, memory.Span.Slice(0, gameUpdate.NewPlayerByteLength));
+            if (!ProcessNewPlayers(gameUpdate.NewPlayerCount, memory.Span.Slice(0, gameUpdate.NewPlayerByteLength)))
+                return (UpdateResult.Corrupt, "Failed to process new players.");
+
             memory = memory.Slice(gameUpdate.NewPlayerByteLength);
 
             if (memory.Length != 0)
@@ -816,11 +850,13 @@ public partial class Plugin
         {
             bool response = client.PluginVersion >= new PluginVersion(4, 0);
 
-            WriteLocalInfoCommand(cbSpan, response);
+            if (!WriteLocalInfoCommand(cbSpan, response))
+                return;
         }
         else if (localSteamID != 0)
         {
-            WriteLegacyLocalInfoCommand(cbSpan);
+            if (!WriteLegacyLocalInfoCommand(cbSpan))
+                return;
         }
         else
         {
@@ -837,7 +873,9 @@ public partial class Plugin
         const int commandBufferSize = 64;
         byte* commandBuffer = stackalloc byte[commandBufferSize];
 
-        WriteLocalInfoCommand(new Span<byte>(commandBuffer, commandBufferSize), response: false);
+        if (!WriteLocalInfoCommand(new Span<byte>(commandBuffer, commandBufferSize), response: false))
+            return;
+
         SendCommandToChannelClients(channel, commandBuffer);
     }
 
@@ -846,7 +884,8 @@ public partial class Plugin
         const int commandBufferSize = 64;
         byte* commandBuffer = stackalloc byte[commandBufferSize];
 
-        WriteLocalInfoCommand(new Span<byte>(commandBuffer, commandBufferSize), response: false);
+        if (!WriteLocalInfoCommand(new Span<byte>(commandBuffer, commandBufferSize), response: false))
+            return;
 
         functions.sendPluginCommand(currentServerId, pluginID, commandBuffer, PluginTargetMode.PluginCommandTarget_CURRENT_CHANNEL, null, null);
 
@@ -1021,7 +1060,7 @@ public partial class Plugin
         }
     }
 
-    void ProcessNewPlayers(int numNewPlayers, ReadOnlySpan<byte> bytes)
+    bool ProcessNewPlayers(int numNewPlayers, ReadOnlySpan<byte> bytes)
     {
         WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Received {numNewPlayers} new players.");
 
@@ -1029,6 +1068,15 @@ public partial class Plugin
         {
             ulong id = Read<ulong>(ref bytes);
             int nameLength = Read<int>(ref bytes);
+
+            const int maxNameLength = 64;
+
+            if (nameLength < 0 || nameLength > maxNameLength)
+            {
+                WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Invalid name length {nameLength} for player SteamID: {id}");
+                return false;
+            }
+
             var name = new string(MemoryMarshal.Cast<byte, char>(bytes).Slice(0, nameLength));
 
             bytes = bytes.Slice(nameLength * sizeof(char));
@@ -1059,6 +1107,8 @@ public partial class Plugin
 #endif
             }
         }
+
+        return true;
     }
 
     unsafe static T Read<T>(ref ReadOnlySpan<byte> span) where T : unmanaged
@@ -1074,15 +1124,18 @@ public partial class Plugin
         span = span.Slice(sizeof(T));
     }
 
-    Client? GetClientByClientId(ushort id)
+    Client? GetClientByClientIdThreadSafe(ushort id)
     {
         lock (clients)
+            return GetClientByClientId(id);
+    }
+
+    Client? GetClientByClientId(ushort id)
+    {
+        foreach (var item in clients)
         {
-            foreach (var item in clients)
-            {
-                if (item.ClientID == id)
-                    return item;
-            }
+            if (item.ClientID == id)
+                return item;
         }
 
         return null;
@@ -1335,10 +1388,19 @@ public partial class Plugin
                 if (id == localClientId)
                     continue;
 
-                var name = GetClientName(channel.ServerID, id);
-                var client = AddClient(id, channel, name);
-
                 GetLocalMuteStateForClient(channel.ServerID, id, out bool muted);
+
+                var client = GetClientByClientId(id);
+
+                if (client != null)
+                {
+                    client.IsLocallyMuted = muted;
+                    continue;
+                }
+
+                var name = GetClientName(channel.ServerID, id);
+
+                client = AddClient(id, channel, name);
                 client.IsLocallyMuted = muted;
 
                 numAdded++;
@@ -1506,7 +1568,7 @@ public partial class Plugin
 
     int ProcessCommand(string cmd)
     {
-        int spaceIndex = cmd.IndexOf(' ');
+        int spaceIndex = cmd.IndexOf(' ', StringComparison.Ordinal);
 
         if (spaceIndex < 0)
         {
@@ -1584,7 +1646,7 @@ public partial class Plugin
         bool TryParseArgValue<T>(ReadOnlySpan<char> arg, [NotNullWhen(true)] out T? value)
             where T : ISpanParsable<T>
         {
-            if (T.TryParse(arg, null, out value))
+            if (T.TryParse(arg, CultureInfo.InvariantCulture, out value))
                 return true;
 
             PrintMessageToCurrentTab($"Error, failed to parse value.");
@@ -1898,7 +1960,7 @@ public partial class Plugin
             SendLocalInfoToChannel(channel);
     }
 
-    void OnChannelSubscribeFinished(ulong serverId, ulong channelId)
+    void OnChannelSubscribeFinished(ulong serverId)
     {
     }
 
@@ -1909,12 +1971,27 @@ public partial class Plugin
 
         lock (serverChannels)
         {
-            if (serverChannels.TryGetValue(channelId, out var channel))
-                channel.IsSubscribed = false;
+            if (!serverChannels.TryGetValue(channelId, out var channel))
+                return;
+
+            channel.IsSubscribed = false;
+
+            lock (clients)
+            {
+                foreach (var client in channel.Clients)
+                {
+                    client.Channel = null;
+                    RemoveClient(client, resetPos: false);
+                }
+
+                channel.Clients.Clear();
+            }
         }
+
+        UpdateWhisperList();
     }
 
-    void OnChannelUnsubscribeFinished(ulong serverId, ulong channelId)
+    void OnChannelUnsubscribeFinished(ulong serverId)
     {
     }
 
@@ -1953,7 +2030,7 @@ public partial class Plugin
             return;
         }
 
-        var client = GetClientByClientId(clientID);
+        var client = GetClientByClientIdThreadSafe(clientID);
 
         if (newChannel == null)
         {
@@ -1972,15 +2049,18 @@ public partial class Plugin
             return;
         }
 
+        if (client != null)
+        {
+            client.Channel = newChannel;
+
+            oldChannel?.Clients.Remove(client);
+            newChannel.Clients.Add(client);
+        }
+
         if (newChannel == currentChannel || newChannel.IsSubscribed)
         {
             if (client != null)
             {
-                client.Channel = newChannel;
-
-                oldChannel?.Clients.Remove(client);
-                newChannel.Clients.Add(client);
-
                 WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Client joined current/subscribed channel. ClientID: {clientID}, ClientName: {client.ClientName}, OldChannelID: {oldChannelID}, NewChannelID: {newChannelID}");
             }
             else
@@ -2032,7 +2112,7 @@ public partial class Plugin
             return;
         }
 
-        var client = GetClientByClientId(clientId);
+        var client = GetClientByClientIdThreadSafe(clientId);
 
         if (client == null)
             return;
@@ -2049,7 +2129,7 @@ public partial class Plugin
 
     void CalculateClientVolume(ushort clientId, ref float volume)
     {
-        var client = GetClientByClientId(clientId);
+        var client = GetClientByClientIdThreadSafe(clientId);
 
         if (client == null)
             return;
@@ -2090,8 +2170,8 @@ public partial class Plugin
     unsafe void LogMessage(string message, LogLevel level, string? channel)
     {
         byte nullChar = 0;
-        var msgPtr = Marshal.StringToHGlobalAnsi(message);
-        var chnPtr = channel != null ? Marshal.StringToHGlobalAnsi(channel) : (IntPtr)(&nullChar);
+        IntPtr msgPtr = Marshal.StringToCoTaskMemUTF8(message);
+        IntPtr chnPtr = channel != null ? Marshal.StringToCoTaskMemUTF8(channel) : (IntPtr)(&nullChar);
 
         try
         {
@@ -2102,10 +2182,10 @@ public partial class Plugin
         }
         finally
         {
-            Marshal.FreeHGlobal(msgPtr);
+            Marshal.FreeCoTaskMem(msgPtr);
 
             if (channel != null)
-                Marshal.FreeHGlobal(chnPtr);
+                Marshal.FreeCoTaskMem(chnPtr);
         }
     }
 
@@ -2297,7 +2377,7 @@ public partial class Plugin
 
     unsafe void SendMessageToClient(ulong serverId, ushort clientId, string message)
     {
-        IntPtr ptr = Marshal.StringToHGlobalAnsi(message);
+        IntPtr ptr = Marshal.StringToCoTaskMemUTF8(message);
 
         try
         {
@@ -2308,7 +2388,7 @@ public partial class Plugin
         }
         finally
         {
-            Marshal.FreeHGlobal(ptr);
+            Marshal.FreeCoTaskMem(ptr);
         }
     }
 
@@ -2367,7 +2447,7 @@ public partial class Plugin
         if (err == Ts3ErrorType.ERROR_ok)
             return true;
 
-        if (channelIds.Length == 0)
+        if (channelIds.Length == 1)
             WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to subscribe to channel {channelIds[0]}. Error: {err}");
         else
             WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to subscribe to {channelIds.Length} channels. Error: {err}");
@@ -2384,14 +2464,14 @@ public partial class Plugin
         var err = (Ts3ErrorType)functions.requestChannelUnsubscribe(serverId, channelList, null);
 
         if (err == Ts3ErrorType.ERROR_ok)
-            return false;
+            return true;
 
-        if (channelIds.Length == 0)
+        if (channelIds.Length == 1)
             WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to unsubscribe from channel {channelIds[0]}. Error: {err}");
         else
             WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to unsubscribe from {channelIds.Length} channels. Error: {err}");
 
-        return true;
+        return false;
     }
 
     unsafe string? GetChannelTopic(ulong serverId, ulong channelId)
@@ -2417,7 +2497,7 @@ public partial class Plugin
 
     unsafe void PrintMessageToCurrentTab(string message)
     {
-        IntPtr ptr = Marshal.StringToHGlobalAnsi(message);
+        IntPtr ptr = Marshal.StringToCoTaskMemUTF8(message);
 
         try
         {
@@ -2425,7 +2505,7 @@ public partial class Plugin
         }
         finally
         {
-            Marshal.FreeHGlobal(ptr);
+            Marshal.FreeCoTaskMem(ptr);
         }
     }
 
@@ -2510,15 +2590,18 @@ public partial class Plugin
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_currentServerConnectionChanged")]
-    public unsafe static void ts3plugin_currentServerConnectionChanged(ulong serverConnectionHandlerID)
+    public static void ts3plugin_currentServerConnectionChanged(ulong serverConnectionHandlerID)
     {
         instance.currentServerId = serverConnectionHandlerID;
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onConnectStatusChangeEvent")]
-    public unsafe static void ts3plugin_onConnectStatusChangeEvent(ulong serverConnectionHandlerID, int newStatus, uint errorNumber)
+    public static void ts3plugin_onConnectStatusChangeEvent(ulong serverConnectionHandlerID, int newStatus, uint errorNumber)
     {
         //WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"ConnectStatusChangeEvent. NewStatus: {newStatus}");
+
+        if (serverConnectionHandlerID != instance.currentServerId)
+            return;
 
         var connStatus = (ConnectStatus)newStatus;
 
@@ -2528,7 +2611,7 @@ public partial class Plugin
         }
         else if (connStatus == ConnectStatus.STATUS_CONNECTION_ESTABLISHED)
         {
-            if (instance.UpdateLocalClientIdAndChannel(instance.currentServerId))
+            if (instance.UpdateLocalClientIdAndChannel(serverConnectionHandlerID))
             {
                 instance.Set3DSettings(instance.distanceScale, 1);
                 instance.FetchTSClients();
@@ -2538,7 +2621,7 @@ public partial class Plugin
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onNewChannelEvent")]
-    public unsafe static void ts3plugin_onNewChannelEvent(ulong serverConnectionHandlerID, ulong channelID, ulong channelParentID)
+    public static void ts3plugin_onNewChannelEvent(ulong serverConnectionHandlerID, ulong channelID, ulong channelParentID)
     {
         instance.OnNewChannel(serverConnectionHandlerID, channelID, channelParentID);
     }
@@ -2636,7 +2719,7 @@ public partial class Plugin
         if (!nameUtf8.SequenceEqual(DLLName))
             return;
 
-        var client = instance.GetClientByClientId(invokerClientID);
+        var client = instance.GetClientByClientIdThreadSafe(invokerClientID);
         var invokerNameStr = Marshal.PtrToStringUTF8((nint)invokerName);
 
         if (client == null)
@@ -2662,7 +2745,7 @@ public partial class Plugin
             return;
 
         var name = Marshal.PtrToStringUTF8((IntPtr)displayName);
-        var client = instance.GetClientByClientId(clientID);
+        var client = instance.GetClientByClientIdThreadSafe(clientID);
 
         if (client != null)
         {
@@ -2681,31 +2764,31 @@ public partial class Plugin
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onChannelSubscribeEvent")]
-    public unsafe static void ts3plugin_onChannelSubscribeEvent(ulong serverConnectionHandlerID, ulong channelID)
+    public static void ts3plugin_onChannelSubscribeEvent(ulong serverConnectionHandlerID, ulong channelID)
     {
         instance.OnChannelSubscribed(serverConnectionHandlerID, channelID);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onChannelSubscribeFinishedEvent")]
-    public unsafe static void ts3plugin_onChannelSubscribeFinishedEvent(ulong serverConnectionHandlerID, ulong channelID)
+    public static void ts3plugin_onChannelSubscribeFinishedEvent(ulong serverConnectionHandlerID)
     {
-        instance.OnChannelSubscribeFinished(serverConnectionHandlerID, channelID);
+        instance.OnChannelSubscribeFinished(serverConnectionHandlerID);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onChannelUnsubscribeEvent")]
-    public unsafe static void ts3plugin_onChannelUnsubscribeEvent(ulong serverConnectionHandlerID, ulong channelID)
+    public static void ts3plugin_onChannelUnsubscribeEvent(ulong serverConnectionHandlerID, ulong channelID)
     {
         instance.OnChannelUnsubscribed(serverConnectionHandlerID, channelID);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onChannelUnsubscribeFinishedEvent")]
-    public unsafe static void ts3plugin_onChannelUnsubscribeFinishedEvent(ulong serverConnectionHandlerID, ulong channelID)
+    public static void ts3plugin_onChannelUnsubscribeFinishedEvent(ulong serverConnectionHandlerID)
     {
-        instance.OnChannelUnsubscribeFinished(serverConnectionHandlerID, channelID);
+        instance.OnChannelUnsubscribeFinished(serverConnectionHandlerID);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onClientMoveSubscriptionEvent")]
-    public unsafe static void ts3plugin_onClientMoveSubscriptionEvent(ulong serverConnectionHandlerID, ushort clientID, ulong oldChannelID, ulong newChannelID, Visibility visibility)
+    public static void ts3plugin_onClientMoveSubscriptionEvent(ulong serverConnectionHandlerID, ushort clientID, ulong oldChannelID, ulong newChannelID, Visibility visibility)
     {
         instance.OnClientMoveSubscriptionEvent(serverConnectionHandlerID, clientID, oldChannelID, newChannelID, visibility);
     }

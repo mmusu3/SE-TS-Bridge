@@ -24,7 +24,7 @@ namespace TSPluginForSE;
 
 public class Plugin : IPlugin
 {
-    static PluginVersion currentVersion = new(4, 2);
+    static PluginVersion currentVersion = new(4, 3);
 
     internal class PlayerInfo
     {
@@ -53,11 +53,13 @@ public class Plugin : IPlugin
         }
 #endif
 
+        public const int MaxNameLength = 64;
+
         public PlayerInfo(IMyPlayer? internalPlayer, ulong steamID, string displayName, Vector3D position)
         {
             InternalPlayer = internalPlayer;
             SteamID = steamID;
-            DisplayName = displayName;
+            DisplayName = displayName.Length > MaxNameLength ? displayName.Substring(0, MaxNameLength) : displayName;
             Position = position;
             HasConnection = true;
         }
@@ -79,7 +81,7 @@ public class Plugin : IPlugin
     NamedPipeServerStream? pipeStream;
     CancellationTokenSource pipeCancellation;
     Task? connectTask;
-    Queue<Task> sendTasks = [];
+    Queue<(Task Task, byte[] Buffer)> sendTasks = [];
 
     readonly Vector3 mouthOffset = new Vector3(0, 1.6f, -0.1f); // Approximate mouth offset
 
@@ -92,12 +94,14 @@ public class Plugin : IPlugin
     public Plugin()
     {
         pipeCancellation = null!;
-        mpMessageHandler = MPMessageHandler;
+        mpMessageHandler = MPMessageClientHandler;
     }
 
     public void Init(object gameInstance)
     {
         MyLog.Default.WriteLine("[SE-TS Bridge] Initializing.");
+
+        pipeCancellation = new CancellationTokenSource();
 
         BeginConnection();
 
@@ -110,8 +114,6 @@ public class Plugin : IPlugin
     void BeginConnection()
     {
         MyLog.Default.WriteLine("[SE-TS Bridge] Beginning connection.");
-
-        pipeCancellation = new CancellationTokenSource();
 
         const PipeDirection direction = PipeDirection.Out;
 
@@ -192,14 +194,7 @@ public class Plugin : IPlugin
 
         Write(ref span, updatePacket);
 
-        try
-        {
-            pipeStream.WriteAsync(buffer, 0, dataSize);
-        }
-        finally
-        {
-            arrayPool.Return(buffer);
-        }
+        SendUpdate(buffer, dataSize);
     }
 
     public void Dispose()
@@ -222,7 +217,7 @@ public class Plugin : IPlugin
         MyLog.Default.WriteLine("[SE-TS Bridge] Disposed.");
     }
 
-    void MPMessageHandler(ushort handlerId, byte[] message, ulong steamId, bool fromServer)
+    void MPMessageClientHandler(ushort handlerId, byte[] message, ulong steamId, bool fromServer)
     {
         // If the message does not match what is expected there might be another mod using the same handlerId.
 
@@ -236,7 +231,7 @@ public class Plugin : IPlugin
 
         int numBytes = Read<int>(ref bytes);
 
-        if (numBytes != message.Length)
+        if (numBytes != message.Length || numBytes < sizeof(int) * 2)
             return; // Invalid message.
 
         int numPlayers = Read<int>(ref bytes);
@@ -251,8 +246,7 @@ public class Plugin : IPlugin
             bool hasConnection = Read<bool>(ref bytes);
             var player = GetPlayerBySteamId(playerId);
 
-            if (player != null)
-                player.HasConnection = hasConnection;
+            player?.HasConnection = hasConnection;
         }
     }
 
@@ -378,9 +372,10 @@ public class Plugin : IPlugin
         }
 
         var camera = session.Camera;
-        var localPos = camera.WorldMatrix.Translation;
-        var localOrient = camera.WorldMatrix.Rotation;
-        var inverseLocalOrient = Quaternion.Inverse(Quaternion.CreateFromRotationMatrix(camera.WorldMatrix.GetOrientation()));
+        var cameraMatrix = camera?.WorldMatrix ?? MatrixD.Identity;
+        var localPos = cameraMatrix.Translation;
+        var localOrient = cameraMatrix.Rotation;
+        var inverseLocalOrient = Quaternion.Inverse(Quaternion.CreateFromRotationMatrix(cameraMatrix.GetOrientation()));
 
         var updatePacket = new GameUpdatePacket {
             Header = new GameUpdatePacketHeader {
@@ -510,43 +505,53 @@ public class Plugin : IPlugin
 
     void SendUpdate(byte[] buffer, int dataSize)
     {
-        try
+        while (sendTasks.Count > 0)
         {
-            while (sendTasks.Count > 0)
+            var (t, b) = sendTasks.Peek();
+
+            if (t.IsCompleted)
             {
-                var t = sendTasks.Peek();
+                sendTasks.Dequeue();
+                ArrayPool<byte>.Shared.Return(b);
 
-                if (t.IsCompleted)
-                {
-                    sendTasks.Dequeue();
-                }
-                else if (sendTasks.Count > 2)
-                {
-                    bool done = t.Wait(100);
-
-                    if (!done)
-                    {
-                        pipeStream!.Dispose();
-                        return;
-                    }
-
-                    sendTasks.Dequeue();
-                }
-                else
-                {
-                    break;
-                }
+                if (t.IsFaulted)
+                    MyLog.Default.WriteLine($"[SE-TS Bridge] Exception while sending update: {t.Exception}");
             }
+            else if (sendTasks.Count > 2)
+            {
+                sendTasks.Dequeue();
 
-            var task = pipeStream!.WriteAsync(buffer, 0, dataSize);
+                bool done;
 
-            sendTasks.Enqueue(task);
-            pipeStream.Flush();
+                try
+                {
+                    done = t.Wait(100);
+                }
+                catch (AggregateException ex)
+                {
+                    MyLog.Default.WriteLine($"[SE-TS Bridge] Exception while waiting for prior send task: {ex.InnerException}");
+                    done = false;
+                }
+
+                if (!done)
+                {
+                    pipeStream!.Dispose();
+                    return;
+                }
+
+                ArrayPool<byte>.Shared.Return(b);
+            }
+            else
+            {
+                break;
+            }
         }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(buffer);
-        }
+
+        var task = pipeStream!.WriteAsync(buffer, 0, dataSize);
+
+        sendTasks.Enqueue((task, buffer));
+
+        pipeStream.Flush();
     }
 
     unsafe static void Write<T>(ref Span<byte> span, in T value) where T : unmanaged

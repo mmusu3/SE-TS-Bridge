@@ -18,7 +18,7 @@ partial class Plugin
 
         try
         {
-            var response = await client.GetAsync("https://api.github.com/repos/mmusu3/SE-TS-Bridge/releases/latest");
+            var response = await client.GetAsync("https://api.github.com/repos/mmusu3/SE-TS-Bridge/releases/latest").ConfigureAwait(false);
 
             if (!response.IsSuccessStatusCode)
             {
@@ -26,9 +26,20 @@ partial class Plugin
                 return;
             }
 
-            var responseBody = await response.Content.ReadAsStringAsync();
+            var responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
 
-            ParseReleaseInfo(responseBody, out var latestVersion, out var releaseUrl);
+            PluginVersion? latestVersion;
+            string? releaseUrl;
+
+            try
+            {
+                ParseReleaseInfo(responseBody, out latestVersion, out releaseUrl);
+            }
+            catch (JsonException ex)
+            {
+                WriteConsoleAndLog(LogLevel.LogLevel_WARNING, $"Failed to parse GitHub response: {ex.Message}");
+                return;
+            }
 
             if (latestVersion is not { } v || releaseUrl == null)
             {
@@ -57,7 +68,7 @@ partial class Plugin
         version = null;
         url = null;
 
-        var doc = JsonDocument.Parse(releaseInfo);
+        using var doc = JsonDocument.Parse(releaseInfo);
 
         if (doc.RootElement.TryGetProperty("tag_name", out var tagProp))
         {
