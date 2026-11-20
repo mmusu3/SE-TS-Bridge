@@ -3,3 +3,4 @@
 .vs
 *Bin
 launchSettings.json
+*.user

@@ -9,14 +9,29 @@ Inside there are two plugins. One for Space Engineers (SE) and one for TeamSpeak
 
 Each one is different and will only work for the specified program so make sure not to mix them up.  
 
+There are two ways to install the plugins, either by using the included installer or by manually copying the plugin files to the correct locations. The installer is the preferred method, but if it does not work for you then follow the manual installation steps below.
+
+#### Installer
+* Close Space Engineers, Pulsar, and TeamSpeak before installing or updating the plugins.
+* Run the `Installer.exe` from the extracted folder, ensuring that both plugin DLLs are beside it.
+* Choose a Space Engineers plugin folder or the folder of your Pulsar installation.
+* The TeamSpeak plugins folder should be automatically set. If it is not set or is incorrect, set it manually. The default is `%appdata%\TS3Client\plugins`.
+* Click Install. Missing plugin folders will be created and existing copies of the plugin DLLs will be overwritten.
+
+The plugins still need to be enabled as described below. The following copy steps are only needed when installing manually.
+
 #### Space Engineers Plugin
 * Plugins in SE from version `1.203.022` onwards require the use of a third-party launcher exe. You must have one in order to use plugins.  
 The SE community has developed a launcher which can be found here: https://github.com/SpaceGT/Pulsar  
 Downloads and installation instructions for the launcher can be found through that link.  
 * Once you have Pulsar installed, make sure it is ***not*** running.  
 * To add the plugin file for SE-TS Bridge, first you may need to unblock the `TSPluginForSE.dll` file in order for it to work. To do so, right click the file and click Properties. At the bottom of the menu if you see a Security section with a checkbox that says Unblock, check it and press the OK button.  
-* Next, go to your Pulsar install directory and open or create the `Legacy` folder there. Inside that you need to open or create the folder named `Local`.  
-* Now copy the `TSPluginForSE.dll` file from the unziped release into the `Pulsar/Legacy/Local` folder.  
+
+Manual installation instructions:
+* Go to your Pulsar install directory and open or create the `Legacy` folder there. Inside that you need to open or create the folder named `Local`.
+* Copy the `TSPluginForSE.dll` file from the unzipped release into the `Pulsar/Legacy/Local` folder.
+
+Plugin setup:
 * Launch SE using Pulsar (with `Legacy.exe` or `Interim.exe`) and click the Plugins button on the main menu.  
 * Click the `Add Plugin` button near the bottom center of the menu (looks like a plus sign) and then search for `TSPluginForSE`.  
 * Mark the checkbox on `TSPluginForSE.dll` and then close the `Plugin List` menu.  
@@ -25,7 +40,7 @@ Downloads and installation instructions for the launcher can be found through th
 
 #### TeamSpeak Plugin
 * This plugin will only work with the 64bit version of TeamSpeak, so be sure you have that one and not the 32bit version.  
-* To install the TS plugin, first copy the `SEPluginForTS.dll` file into your TeamSpeak plugins folder which can usually be found at `%appdata%/TS3Client/plugins`.  
+* If installing manually, copy the `SEPluginForTS.dll` file into your TeamSpeak plugins folder which can usually be found at `%appdata%/TS3Client/plugins`.
 * To make sure the plugin is enabled, go to TeamSpeak `Options->Addons->Plugins` and ensure the `SE-TS Bridge` plugin is enabled there (the button should say Enabled).  
 * To enable positional audio support go to TeamSpeak `Options->Playback` and ensure the `Always set clients 3D positions when available` checkbox is ticked.  
 
