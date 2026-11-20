@@ -48,6 +48,12 @@ public partial class Plugin
     Channel? currentChannel;
     readonly List<Client> clients = [];
 
+    readonly HashSet<ulong> ownedSubscriptions = [];
+    readonly Dictionary<ulong, bool> pendingSubscriptionChanges = [];
+
+    delegate void ReturnCodeAction(Ts3ErrorType error, string? errorMessage, string? extraMessage, ulong failedPermissionID);
+    readonly Dictionary<string, ReturnCodeAction> returnCodeActions = [];
+
     TalkStatus talkStatus;
     readonly List<Channel> whisperChannels = [];
     readonly List<Client> whisperClients = [];
@@ -78,6 +84,13 @@ public partial class Plugin
 
     readonly MemoryPool<byte> memPool = MemoryPool<byte>.Shared;
 
+    enum ChannelSubscriptionState
+    {
+        None,
+        Explicit,
+        Implicit
+    }
+
     enum ChannelMode
     {
         Default,
@@ -98,7 +111,10 @@ public partial class Plugin
 
         public Channel? Parent;
         public List<Channel> Children = [];
-        public bool IsSubscribed;
+
+        public bool IsSubscribed => SubscriptionState != ChannelSubscriptionState.None;
+        public ChannelSubscriptionState SubscriptionState;
+
         public ChannelMode Mode;
         public bool IsPluginActive;
 
@@ -560,9 +576,17 @@ public partial class Plugin
 
             lock (lockObject)
             {
+                ClearClientWhisperState(currentServerId, localClientId);
+
                 whisperChannels.Clear();
                 whisperClients.Clear();
                 usingWhisperList = false;
+
+                UndoOwnedSubscriptions();
+
+                ownedSubscriptions.Clear();
+                pendingSubscriptionChanges.Clear();
+                returnCodeActions.Clear();
 
                 clients = [.. this.clients];
 
@@ -577,8 +601,8 @@ public partial class Plugin
 
             // Must be done outside of the lock.
             // See SetClientPosUnlocked for details.
-            foreach (var item in clients)
-                SetClientPos(serverId, item.ClientID, default);
+            foreach (var client in clients)
+                SetClientPos(serverId, client.ClientID, default);
 
             cancellationTokenSource.Dispose();
 
@@ -1822,7 +1846,7 @@ public partial class Plugin
                 ClearClientWhisperState(oldServerId, localClientId);
 
             ResetClientPositionsUnlocked(oldServerId, clients.Select(c => c.ClientID).ToArray());
-
+            UndoOwnedSubscriptions();
             ClearCurrentServerState();
         }
 
@@ -1914,6 +1938,45 @@ public partial class Plugin
         whisperChannels.Clear();
         whisperClients.Clear();
         usingWhisperList = false;
+        ownedSubscriptions.Clear();
+        pendingSubscriptionChanges.Clear();
+        returnCodeActions.Clear();
+    }
+
+    unsafe bool OnServerError(ulong serverId, byte* errorMessage, Ts3ErrorType error, byte* returnCode, byte* extraMessage)
+    {
+        var errorCodeStr    = errorMessage != null ? Marshal.PtrToStringUTF8((nint)errorMessage) : null;
+        var returnCodeStr   =   returnCode != null ? Marshal.PtrToStringUTF8((nint)returnCode) : null;
+        var extraMessageStr = extraMessage != null ? Marshal.PtrToStringUTF8((nint)extraMessage) : null;
+
+        return OnServerError(serverId, errorCodeStr, error, returnCodeStr, extraMessageStr, failedPermissionID: 0);
+    }
+
+    unsafe bool OnPermissionError(ulong serverId, byte* errorMessage, Ts3ErrorType error, byte* returnCode, uint failedPermissionID)
+    {
+        var errorCodeStr = errorMessage != null ? Marshal.PtrToStringUTF8((nint)errorMessage) : null;
+        var returnCodeStr =  returnCode != null ? Marshal.PtrToStringUTF8((nint)returnCode) : null;
+
+        return OnServerError(serverId, errorCodeStr, error, returnCodeStr, extraMessage: null, failedPermissionID);
+    }
+
+    bool OnServerError(ulong serverId, string? errorMessage, Ts3ErrorType error, string? returnCode, string? extraMessage, uint failedPermissionID)
+    {
+        if (serverId != currentServerId)
+            return false;
+
+        if (returnCode == null)
+            return false;
+
+        if (returnCodeActions.TryGetValue(returnCode, out var action))
+        {
+            returnCodeActions.Remove(returnCode);
+            action(error, errorMessage, extraMessage, failedPermissionID);
+
+            return true;
+        }
+
+        return false;
     }
 
     // When receiving channels during server join.
@@ -1952,7 +2015,7 @@ public partial class Plugin
         channel.IsPluginActive = true;
 
         if (!channel.IsSubscribed)
-            SubscribeToChannels(serverId, [channelId]);
+            RequestOwnedSubscription(channel);
     }
 
     Channel? RegisterChannel(ulong serverId, ulong channelId, ulong channelParentId)
@@ -1980,7 +2043,10 @@ public partial class Plugin
             ID = channelId,
             Name = name,
             Parent = parent,
-            IsSubscribed = isSubscribed // NOTE: A client is automatically subscribed to the current channel.
+            // NOTE: A client is automatically implicitly subscribed to the current channel.
+            // There is no way to know if the client is explicitly subscribed to the current channel or not.
+            // This state can be wrong for the channel that the client joins the server into.
+            SubscriptionState = isSubscribed ? ChannelSubscriptionState.Explicit : ChannelSubscriptionState.None
         };
 
         channel.SetTopic(topic);
@@ -2017,6 +2083,9 @@ public partial class Plugin
             channel.Clients.Clear();
         }
 
+        pendingSubscriptionChanges.Remove(channelId);
+        ownedSubscriptions.Remove(channelId);
+
         if (channel.IsPluginActive)
             UpdateWhisperList();
     }
@@ -2051,7 +2120,6 @@ public partial class Plugin
             }
         }
 
-        //UnsubscribeFromActiveChannels();
         UpdateActiveChannels();
     }
 
@@ -2066,6 +2134,9 @@ public partial class Plugin
         if (!serverChannels.TryGetValue(channelId, out channel))
             return;
 
+        if (GetChannelName(serverId, channelId, out string? name))
+            channel.Name = name;
+
         var oldMode = channel.Mode;
 
         channel.SetTopic(GetChannelTopic(serverId, channelId));
@@ -2073,12 +2144,14 @@ public partial class Plugin
         if (channel.Mode == oldMode)
             return;
 
-        //UnsubscribeFromActiveChannels();
         UpdateActiveChannels();
     }
 
     void OnCurrentChannelChanged(ulong oldChannelId)
     {
+        if (currentChannel != null && currentChannel.SubscriptionState != ChannelSubscriptionState.Explicit)
+            currentChannel.SubscriptionState = ChannelSubscriptionState.Implicit;
+
         if (oldChannelId != 0)
         {
             if (!serverChannels.TryGetValue(oldChannelId, out var oldChannel))
@@ -2102,34 +2175,99 @@ public partial class Plugin
         }
 
         if (currentChannel != null)
-        {
-            currentChannel.IsSubscribed = true;
             FetchTSClients();
-        }
 
-        //UnsubscribeFromActiveChannels();
         UpdateActiveChannels();
     }
 
-    // TODO: Fix or remove this as it can unsubscribe from
-    // channels that the user explicitly subscribed to.
-    void UnsubscribeFromActiveChannels()
+    void RequestOwnedSubscription(Channel channel)
     {
-        var ids = new List<ulong>(serverChannels.Count);
+        if (channel.IsSubscribed || channel == currentChannel || pendingSubscriptionChanges.ContainsKey(channel.ID))
+            return;
 
-        foreach (var channel in serverChannels.Values)
+        pendingSubscriptionChanges.Add(channel.ID, true);
+
+        if (!RequestSubscriptionChange(channel.ID, subscribe: true))
+            pendingSubscriptionChanges.Remove(channel.ID);
+    }
+
+    void RequestOwnedUnsubscription(Channel channel)
+    {
+        RequestOwnedUnsubscription(channel.ID);
+    }
+
+    void RequestOwnedUnsubscription(ulong channelId)
+    {
+        if (!ownedSubscriptions.Contains(channelId))
+            return; // Already unsubscribed or unowned.
+
+        if (!pendingSubscriptionChanges.TryAdd(channelId, false))
+            return; // Already pending subscription change.
+
+        if (!RequestSubscriptionChange(channelId, subscribe: false))
+            pendingSubscriptionChanges.Remove(channelId); // Request failed.
+    }
+
+    bool RequestSubscriptionChange(ulong channelId, bool subscribe)
+    {
+        string? returnCode;
+        IntPtr returnCodePtr;
+
+        unsafe
         {
-            if (channel.IsPluginActive)
-            {
-                channel.IsPluginActive = false;
+            byte* codePtr = stackalloc byte[128];
+            codePtr[0] = 0;
 
-                if (DoesChannelExist(channel.ServerID, channel.ID))
-                    ids.Add(channel.ID);
-            }
+            functions.createReturnCode(pluginID, codePtr, 128);
+
+            returnCodePtr = (IntPtr)codePtr;
+            returnCode = Marshal.PtrToStringUTF8(returnCodePtr);
         }
 
-        if (ids.Count > 0)
-            UnsubscribeFromChannels(currentServerId, CollectionsMarshal.AsSpan(ids));
+        if (string.IsNullOrEmpty(returnCode))
+        {
+            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, "Failed to create a channel subscription return code.");
+            return false;
+        }
+
+        returnCodeActions.Add(returnCode, (error, errorMessage, extraMessage, failedPermissionID)
+            => OnSubscriptionRequestResult(channelId, subscribe, error, errorMessage));
+
+        bool success;
+
+        if (subscribe)
+            success = SubscribeToChannels(currentServerId, [channelId], returnCodePtr);
+        else
+            success = UnsubscribeFromChannels(currentServerId, [channelId], returnCodePtr);
+
+        if (success)
+            return true;
+
+        returnCodeActions.Remove(returnCode);
+
+        return false;
+    }
+
+    void OnSubscriptionRequestResult(ulong channelId, bool subscribe, Ts3ErrorType error, string? errorMessage)
+    {
+        if (error == Ts3ErrorType.ERROR_ok)
+            return;
+
+        pendingSubscriptionChanges.Remove(channelId);
+
+        WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"{(subscribe ? "Subscription" : "Unsubscription")} request for channel {channelId} failed. Error: {error}, Message: {errorMessage}");
+    }
+
+    void UndoOwnedSubscriptions()
+    {
+        foreach (var (channelId, subscribe) in pendingSubscriptionChanges)
+        {
+            if (subscribe)
+                RequestSubscriptionChange(channelId, subscribe: false);
+        }
+
+        foreach (ulong channelId in ownedSubscriptions)
+            RequestOwnedUnsubscription(channelId);
     }
 
     void UpdateActiveChannels()
@@ -2153,23 +2291,18 @@ public partial class Plugin
 
         if (root != null)
         {
-            var ids = new List<ulong>();
-
             root.IsPluginActive = true;
 
-            if (root != currentChannel)
-                ids.Add(root.ID);
-
             foreach (var channel in root.Descendants)
-            {
                 channel.IsPluginActive = true;
+        }
 
-                if (channel != currentChannel)
-                    ids.Add(channel.ID);
-            }
-
-            if (ids.Count > 0)
-                SubscribeToChannels(root.ServerID, CollectionsMarshal.AsSpan(ids));
+        foreach (var channel in serverChannels.Values)
+        {
+            if (channel.IsPluginActive)
+                RequestOwnedSubscription(channel);
+            else
+                RequestOwnedUnsubscription(channel);
         }
 
         if (currentChannel is { IsPluginActive: true })
@@ -2184,6 +2317,14 @@ public partial class Plugin
         if (serverId != currentServerId)
             return;
 
+        if (pendingSubscriptionChanges.TryGetValue(channelId, out bool subscribe))
+        {
+            pendingSubscriptionChanges.Remove(channelId);
+
+            if (subscribe)
+                ownedSubscriptions.Add(channelId);
+        }
+
         Channel? channel;
 
         if (!serverChannels.TryGetValue(channelId, out channel))
@@ -2193,7 +2334,10 @@ public partial class Plugin
         }
 
         bool wasSubscribed = channel.IsSubscribed;
-        channel.IsSubscribed = true;
+        channel.SubscriptionState = ChannelSubscriptionState.Explicit;
+
+        if (!channel.IsPluginActive && channel != currentChannel)
+            RequestOwnedUnsubscription(channel);
 
         WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Channel subscribed. ID: {channel.ID}, Name: {channel.Name}");
 
@@ -2221,13 +2365,19 @@ public partial class Plugin
         if (serverId != currentServerId)
             return;
 
+        bool wasPending = pendingSubscriptionChanges.TryGetValue(channelId, out bool subscribe) && !subscribe;
+
+        pendingSubscriptionChanges.Remove(channelId);
+        ownedSubscriptions.Remove(channelId);
+
         if (!serverChannels.TryGetValue(channelId, out var channel))
         {
             WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Unregistered channel unsubscribed. ID: {channelId}");
             return;
         }
 
-        channel.IsSubscribed = false;
+        bool wasImplicitSubscription = channel.SubscriptionState == ChannelSubscriptionState.Implicit;
+        channel.SubscriptionState = ChannelSubscriptionState.None;
 
         WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Channel unsubscribed. ID: {channel.ID}, Name: {channel.Name}");
 
@@ -2245,6 +2395,10 @@ public partial class Plugin
         channel.Clients.Clear();
 
         UpdateWhisperList();
+
+        // Check if resubscription is needed.
+        if (channel.IsPluginActive && (wasPending || wasImplicitSubscription))
+            RequestOwnedSubscription(channel);
     }
 
     // This event is a convinience callback to mark the
@@ -2938,6 +3092,20 @@ public partial class Plugin
     {
         lock (instance.lockObject)
             instance.OnServerConnectStatusChanged(serverConnectionHandlerID, (ConnectStatus)newStatus, errorNumber);
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onServerErrorEvent")]
+    public unsafe static int ts3plugin_onServerErrorEvent(ulong serverConnectionHandlerID, byte* errorMessage, uint error, byte* returnCode, byte* extraMessage)
+    {
+        lock (instance.lockObject)
+            return instance.OnServerError(serverConnectionHandlerID, errorMessage, (Ts3ErrorType)error, returnCode, extraMessage) ? 1 : 0;
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onServerPermissionErrorEvent")]
+    public unsafe static int ts3plugin_onServerPermissionErrorEvent(ulong serverConnectionHandlerID, byte* errorMessage, uint error, byte* returnCode, uint failedPermissionID)
+    {
+        lock (instance.lockObject)
+            return instance.OnPermissionError(serverConnectionHandlerID, errorMessage, (Ts3ErrorType)error, returnCode, failedPermissionID) ? 1 : 0;
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onNewChannelEvent")]
