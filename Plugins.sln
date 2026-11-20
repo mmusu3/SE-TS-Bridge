@@ -1,7 +1,7 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio Version 17
-VisualStudioVersion = 17.1.32228.430
+# Visual Studio Version 18
+VisualStudioVersion = 18.12.12412.261 stable
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SEPluginForTS", "SEPluginForTS\SEPluginForTS.csproj", "{AA7045FC-9487-4E17-9225-3A843C6F9E98}"
 EndProject
@@ -10,6 +10,8 @@ EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SE-TS_Mod", "SE-TS_Mod\SE-TS_Mod.csproj", "{1C6BFD57-7305-4589-8D88-0EEE5110AACB}"
 EndProject
 Project("{D954291E-2A0B-460D-934E-DC6B0785DB48}") = "SharedPluginClasses", "SharedPluginClasses\SharedPluginClasses.shproj", "{A3E3E4A3-BFCF-4F6F-98D5-D556E7B0D1F2}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Installer", "Installer\Installer.csproj", "{EB9ECE16-3280-498C-9E3E-F5B13372F323}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -43,6 +45,14 @@ Global
 		{1C6BFD57-7305-4589-8D88-0EEE5110AACB}.Release|Any CPU.Build.0 = Release|Any CPU
 		{1C6BFD57-7305-4589-8D88-0EEE5110AACB}.Release|x64.ActiveCfg = Release|Any CPU
 		{1C6BFD57-7305-4589-8D88-0EEE5110AACB}.Release|x64.Build.0 = Release|Any CPU
+		{EB9ECE16-3280-498C-9E3E-F5B13372F323}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EB9ECE16-3280-498C-9E3E-F5B13372F323}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EB9ECE16-3280-498C-9E3E-F5B13372F323}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{EB9ECE16-3280-498C-9E3E-F5B13372F323}.Debug|x64.Build.0 = Debug|Any CPU
+		{EB9ECE16-3280-498C-9E3E-F5B13372F323}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EB9ECE16-3280-498C-9E3E-F5B13372F323}.Release|Any CPU.Build.0 = Release|Any CPU
+		{EB9ECE16-3280-498C-9E3E-F5B13372F323}.Release|x64.ActiveCfg = Release|Any CPU
+		{EB9ECE16-3280-498C-9E3E-F5B13372F323}.Release|x64.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
