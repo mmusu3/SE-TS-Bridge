@@ -327,11 +327,32 @@ public partial class Plugin
         var pluginName = Path.GetFileNameWithoutExtension(path);
         var expectedName = Encoding.UTF8.GetString(DLLName);
 
-        if (pluginName == expectedName)
+        if (pluginName != expectedName)
+        {
+            PrintMessage($"Plugin DLL file name does not match expected name '{expectedName}'. Actual: '{pluginName}'", PrintMessageTarget.ConsoleAndLog, LogLevel.LogLevel_ERROR);
+            PrintMessage($"ERROR: The name of the plugin DLL file is wrong. SE-TS Bridge will not work properly unless the file is named '{expectedName}.dll'", PrintMessageTarget.UI);
+            return;
+        }
+
+        var dir = Path.GetDirectoryName(path);
+
+        if (dir == null)
             return;
 
-        PrintMessage($"Plugin DLL file name does not match expected name '{expectedName}'. Actual: '{pluginName}'", PrintMessageTarget.ConsoleAndLog, LogLevel.LogLevel_ERROR);
-        PrintMessage($"ERROR: The name of the plugin DLL file is wrong. SE-TS Bridge will not work properly unless the file is named '{expectedName}.dll'", PrintMessageTarget.UI);
+        foreach (var filePath in Directory.GetFiles(dir))
+        {
+            var name = Path.GetFileNameWithoutExtension(filePath);
+
+            if (name == expectedName)
+                continue;
+
+            if (name.StartsWith(expectedName))
+            {
+                var nameAndExt = Path.GetFileName(filePath);
+
+                PrintMessage($"WARNING: Possible duplicate plugin file '{nameAndExt}' found in the plugins folder. This may cause issues.", PrintMessageTarget.All, LogLevel.LogLevel_WARNING);
+            }
+        }
     }
 
     string? GetCurrentDllPath(int bufferSize, out int error)
