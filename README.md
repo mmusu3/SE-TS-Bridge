@@ -65,7 +65,7 @@ Where (x) is a number.
 
 Default values:  
 * `distancescale 0.05`
-* `distancefalloff 2`
+* `distancefalloff 1.7`
 * `maxdistance 150`
 
 These commands may be restricted or removed in future releases.

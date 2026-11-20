@@ -61,7 +61,6 @@ public class Plugin : IPlugin
             SteamID = steamID;
             DisplayName = displayName.Length > MaxNameLength ? displayName.Substring(0, MaxNameLength) : displayName;
             Position = position;
-            HasConnection = true;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -121,8 +120,9 @@ public class Plugin : IPlugin
         {
             pipeStream = new NamedPipeServerStream("09C842DD-F683-4798-A95F-88B0981265BE", direction, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
         }
-        catch (IOException)
+        catch (IOException ex)
         {
+            MyLog.Default.WriteLine($"[SE-TS Bridge] IOException while creating pipe: {ex}");
             pipeStream = null;
         }
 
@@ -299,7 +299,9 @@ public class Plugin : IPlugin
         try
         {
             if (session != null
+#if !USE_OFFLINE_PLAYERS
                 && MyAPIGateway.Multiplayer.MultiplayerActive
+#endif
                 && players != null
                 && session.LocalHumanPlayer != null)
             {
@@ -355,7 +357,9 @@ public class Plugin : IPlugin
         AddNewPlayers(playerCollection, localPlayer);
 
         // Testing code for SE single player
-        //AddOfflinePlayers(localPlayer);
+#if USE_OFFLINE_PLAYERS
+        AddOfflinePlayers(localPlayer);
+#endif
 
         int newPlayersByteLength = 0;
 
@@ -408,7 +412,7 @@ public class Plugin : IPlugin
             {
                 var p = item.InternalPlayer;
 
-                Vector3 pos;
+                Vector3D pos;
                 bool inCockpit = false;
 
                 if (p != null)

@@ -38,6 +38,9 @@ public partial class Plugin
 
     TS3Functions functions;
     unsafe byte* pluginID = null;
+    bool pluginInitCalled;
+
+    readonly Lock lockObject = new();
 
     ulong currentServerId;
     ushort localClientId;
@@ -48,15 +51,14 @@ public partial class Plugin
     TalkStatus talkStatus;
     readonly List<Channel> whisperChannels = [];
     readonly List<Client> whisperClients = [];
-
-    bool UsingWhisperList => whisperChannels.Count > 0 || whisperClients.Count > 0;
+    bool usingWhisperList;
 
     Vector3 listenerForward = new(0, 0, -1);
     Vector3 listenerUp = new(0, 1, 0);
 
     float minDistance = 1.3f;
     float distanceScale = 0.05f;
-    float distanceFalloff = 2f;
+    float distanceFalloff = 1.7f;
     float maxDistance = 150f;
     float extendRangeFactor = 2f;
 
@@ -156,6 +158,13 @@ public partial class Plugin
         Whispering = 16
     }
 
+    enum SpatializeMode
+    {
+        None,
+        Mute,
+        Positional
+    }
+
     class Client
     {
         public ushort ClientID;
@@ -165,6 +174,7 @@ public partial class Plugin
         public ulong SteamID;
         public Vector3 Position;
         public ClientStateFlags Flags;
+        public SpatializeMode SpatializeMode;
 
         public ulong ServerID => Channel?.ServerID ?? 0;
 
@@ -252,7 +262,15 @@ public partial class Plugin
         PrintMessage(text, PrintMessageTarget.ConsoleAndLog, logLevel);
     }
 
-    unsafe void Init()
+    unsafe void OnInit()
+    {
+        pluginInitCalled = true;
+
+        if (pluginID != null)
+            Init();
+    }
+
+    void Init()
     {
         AddOrPrintConsoleMessage($"Version {currentVersion} initializing.");
         LogMessage($"Version {currentVersion} initializing.", LogLevel.LogLevel_INFO, logPrefix);
@@ -261,18 +279,10 @@ public partial class Plugin
 
         _ = CheckForUpdateAsync();
 
-        currentServerId = functions.getCurrentServerConnectionHandlerID();
-
-        var connectionStatus = ConnectStatus.STATUS_DISCONNECTED;
-        var err = (Ts3ErrorType)functions.getConnectionStatus(currentServerId, &connectionStatus);
-
-        if (err == Ts3ErrorType.ERROR_ok && connectionStatus == ConnectStatus.STATUS_CONNECTION_ESTABLISHED && UpdateLocalClientIdAndChannel(currentServerId))
-        {
-            Set3DSettings(distanceScale, 1);
-            FetchTSClients();
-        }
-
         LoadSettingsFile();
+
+        lock (lockObject)
+            CheckForConnectedServer();
 
         cancellationTokenSource = new CancellationTokenSource();
         runningTask = UpdateLoop(cancellationTokenSource.Token);
@@ -281,32 +291,31 @@ public partial class Plugin
     // TeamSpeak uses the DLL name to identify command events, so it needs to match what is expected.
     void VerifyDllName()
     {
-        unsafe
+        int bufferSize = 256;
+        var path = GetCurrentDllPath(bufferSize, out int error);
+
+        const int ERROR_INSUFFICIENT_BUFFER = 0x7A;
+
+        if (path == null && error == ERROR_INSUFFICIENT_BUFFER)
         {
-            int bufferSize = 256;
-            var path = GetCurrentDllPath(bufferSize, out int error);
-
-            if (path == null && error == 0x7A /*ERROR_INSUFFICIENT_BUFFER*/)
-            {
-                bufferSize = 1024;
-                path = GetCurrentDllPath(bufferSize, out error);
-            }
-
-            if (path == null)
-            {
-                PrintMessage($"Failed to get current DLL path. Error code: {error}", PrintMessageTarget.All, LogLevel.LogLevel_ERROR);
-                return;
-            }
-
-            var pluginName = Path.GetFileNameWithoutExtension(path);
-            var expectedName = Encoding.UTF8.GetString(DLLName);
-
-            if (pluginName == expectedName)
-                return;
-
-            PrintMessage($"Plugin DLL file name does not match expected name '{expectedName}'. Actual: '{pluginName}'", PrintMessageTarget.ConsoleAndLog, LogLevel.LogLevel_ERROR);
-            PrintMessage($"ERROR: The name of the plugin DLL file is wrong. SE-TS Bridge will not work properly unless the file is named '{expectedName}.dll'", PrintMessageTarget.UI);
+            bufferSize = 1024;
+            path = GetCurrentDllPath(bufferSize, out error);
         }
+
+        if (path == null)
+        {
+            PrintMessage($"Failed to get current DLL path. Error code: {error}", PrintMessageTarget.All, LogLevel.LogLevel_ERROR);
+            return;
+        }
+
+        var pluginName = Path.GetFileNameWithoutExtension(path);
+        var expectedName = Encoding.UTF8.GetString(DLLName);
+
+        if (pluginName == expectedName)
+            return;
+
+        PrintMessage($"Plugin DLL file name does not match expected name '{expectedName}'. Actual: '{pluginName}'", PrintMessageTarget.ConsoleAndLog, LogLevel.LogLevel_ERROR);
+        PrintMessage($"ERROR: The name of the plugin DLL file is wrong. SE-TS Bridge will not work properly unless the file is named '{expectedName}.dll'", PrintMessageTarget.UI);
     }
 
     string? GetCurrentDllPath(int bufferSize, out int error)
@@ -320,9 +329,11 @@ public partial class Plugin
 
             if (pathSize == bufferSize)
             {
+                const int ERROR_INSUFFICIENT_BUFFER = 0x7A;
+
                 error = Marshal.GetLastWin32Error();
 
-                if (error == 0x7A /*ERROR_INSUFFICIENT_BUFFER*/)
+                if (error == ERROR_INSUFFICIENT_BUFFER)
                     return null;
             }
 
@@ -369,6 +380,105 @@ public partial class Plugin
             [DllImport("kernel32.dll", SetLastError = true)]
             static extern uint GetModuleFileNameW(nint hModule, char* lpFilename, uint nSize);
         }
+    }
+
+    void OnPluginIDRegistered()
+    {
+        if (pluginInitCalled)
+            Init();
+    }
+
+    void CheckForConnectedServer()
+    {
+        currentServerId = functions.getCurrentServerConnectionHandlerID();
+
+        if (currentServerId == 0)
+            return;
+
+        ConnectStatus status = 0;
+        Ts3ErrorType err;
+
+        unsafe { err = (Ts3ErrorType)functions.getConnectionStatus(currentServerId, &status); }
+
+        if (err == Ts3ErrorType.ERROR_ok && status == ConnectStatus.STATUS_CONNECTION_ESTABLISHED)
+            InitializeConnectedServer(currentServerId);
+    }
+
+    void InitializeConnectedServer(ulong serverId)
+    {
+        WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Initializing connected server {serverId}.");
+
+        Set3DSettings(serverId, distanceScale, rolloffScale: 1);
+
+        if (!GetLocalClientId(serverId, out localClientId))
+            return;
+
+        WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Got local client ID: {localClientId}");
+
+        unsafe
+        {
+            ulong* channelList;
+            var err = (Ts3ErrorType)functions.getChannelList(serverId, &channelList);
+
+            if (err != Ts3ErrorType.ERROR_ok)
+            {
+                WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to get channel list for server {serverId}. Error: {err}");
+                return;
+            }
+
+            try
+            {
+                for (int i = 0; channelList[i] != 0; i++)
+                {
+                    if (!serverChannels.ContainsKey(channelList[i]))
+                        RegisterChannel(serverId, channelList[i], 0);
+                }
+            }
+            finally
+            {
+                err = (Ts3ErrorType)functions.freeMemory(channelList);
+
+                if (err != Ts3ErrorType.ERROR_ok)
+                    WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to free channel list pointer. Error: {err}");
+            }
+        }
+
+        foreach (var channel in serverChannels.Values)
+        {
+            // Parent may have already been set if
+            // it was registered before this one.
+            if (channel.Parent != null)
+                continue;
+
+            ulong? parentId = GetParentChannel(serverId, channel.ID);
+
+            if (parentId is null or 0)
+                continue;
+
+            if (serverChannels.TryGetValue(parentId.Value, out var parent))
+            {
+                channel.Parent = parent;
+                parent.Children.Add(channel);
+            }
+            else
+            {
+                WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to find parent channel {parentId} for channel {channel.ID}.");
+            }
+        }
+
+        if (!GetClientChannelId(serverId, localClientId, out ulong channelId))
+            return;
+
+        WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Got current channel ID: {channelId}");
+
+        if (!serverChannels.TryGetValue(channelId, out currentChannel))
+        {
+            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to find current channel with ID {channelId}.");
+            return;
+        }
+
+        FetchTSClients();
+        UpdateActiveChannels();
     }
 
     void LoadSettingsFile()
@@ -445,23 +555,32 @@ public partial class Plugin
 
             pipeStream?.Dispose();
 
-            whisperChannels.Clear();
-            whisperClients.Clear();
+            Client[] clients;
+            ulong serverId;
 
-            lock (clients)
+            lock (lockObject)
             {
-                foreach (var item in clients)
-                    SetClientPos(item.ClientID, default);
+                whisperChannels.Clear();
+                whisperClients.Clear();
+                usingWhisperList = false;
 
-                clients.Clear();
-            }
+                clients = [.. this.clients];
 
-            lock (serverChannels)
+                this.clients.Clear();
                 serverChannels.Clear();
 
-            currentServerId = 0;
-            localClientId = 0;
-            currentChannel = null;
+                serverId = currentServerId;
+                currentServerId = 0;
+                localClientId = 0;
+                currentChannel = null;
+            }
+
+            // Must be done outside of the lock.
+            // See SetClientPosUnlocked for details.
+            foreach (var item in clients)
+                SetClientPos(serverId, item.ClientID, default);
+
+            cancellationTokenSource.Dispose();
 
             WriteConsoleAndLog(LogLevel.LogLevel_INFO, "Disposed.");
         }
@@ -469,11 +588,16 @@ public partial class Plugin
         {
             WriteConsoleAndLog(LogLevel.LogLevel_CRITICAL, $"Exception while disposing plugin: {ex}");
         }
+        finally
+        {
+            pluginInitCalled = false;
+        }
     }
 
     async ValueTask ConnectPipe(CancellationToken cancellationToken)
     {
         bool printWaitMessage = true;
+        uint tries = 0;
 
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -501,7 +625,11 @@ public partial class Plugin
                     printWaitMessage = false;
                 }
 
-                await Task.Delay(TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
+                tries++;
+
+                var delayTime = tries > 12 ? TimeSpan.FromSeconds(60) : TimeSpan.FromSeconds(10);
+
+                await Task.Delay(delayTime, cancellationToken).ConfigureAwait(false);
             }
         }
     }
@@ -531,7 +659,7 @@ public partial class Plugin
         if ((targets & PrintMessageTarget.Console) != 0)
         {
             if (logLevel != LogLevel.LogLevel_INFO)
-                Console.Error.WriteLine($"{consolePrefix}{logLevel.ToString()["LogLevel_".Length..]} {message}");
+                Console.WriteLine($"{consolePrefix}{logLevel.ToString()["LogLevel_".Length..]} {message}");
             else
                 Console.WriteLine(prefixedMessage);
         }
@@ -643,14 +771,17 @@ public partial class Plugin
             }
         }
 
-        isInGameSession = false;
+        lock (lockObject)
+        {
+            isInGameSession = false;
 
-        ResetAllClientPositions();
+            ResetAllClientPositions();
 
-        if (currentChannel is { IsPluginActive: true })
-            SendLocalInfoToActiveChannels();
+            if (currentChannel is { IsPluginActive: true })
+                SendLocalInfoToActiveChannels();
 
-        UpdateWhisperList();
+            UpdateWhisperList();
+        }
 
         if (cancellationToken.IsCancellationRequested)
             return;
@@ -710,24 +841,28 @@ public partial class Plugin
                 return (UpdateResult.Corrupt, "Invalid header version data.");
         }
 
-        bool inSessionDifferent = isInGameSession != header.InSession;
-        isInGameSession = header.InSession;
-
-        if (inSessionDifferent)
+        lock (lockObject)
         {
-            if (currentChannel is not { IsPluginActive: true })
+            bool inSessionDifferent = isInGameSession != header.InSession;
+            isInGameSession = header.InSession;
+
+            if (inSessionDifferent)
+            {
                 UpdateWhisperList();
 
-            if (!isInGameSession)
-                ResetAllClientPositions();
+                if (isInGameSession)
+                    UpdateAllClientPositions();
+                else
+                    ResetAllClientPositions();
+            }
+
+            bool steamIdChanged = header.LocalSteamID != localSteamID;
+
+            localSteamID = header.LocalSteamID;
+
+            if (currentChannel is { IsPluginActive: true } && (inSessionDifferent || steamIdChanged))
+                SendLocalInfoToActiveChannels();
         }
-
-        bool steamIdChanged = header.LocalSteamID != localSteamID;
-
-        localSteamID = header.LocalSteamID;
-
-        if (currentChannel is { IsPluginActive: true } && (inSessionDifferent || steamIdChanged))
-            SendLocalInfoToActiveChannels();
 
         if (bytes != GameUpdatePacket.Size)
             return (UpdateResult.Corrupt, $"Expected {GameUpdatePacket.Size} bytes, got {bytes}");
@@ -737,7 +872,7 @@ public partial class Plugin
 
         // No idea what the deal is with this coord system. Just ignore it and do the transform on the game side.
         //if (localClientId != 0)
-        //    SetListener(updatePacket.Forward, updatePacket.Up);
+        //    SetListener(currentServerId, updatePacket.Forward, updatePacket.Up);
 
         if (gameUpdate.PlayerCount == 0 && gameUpdate.RemovedPlayerCount == 0 && gameUpdate.NewPlayerCount == 0)
             return (UpdateResult.OK, null);
@@ -771,27 +906,39 @@ public partial class Plugin
         if (cancellationToken.IsCancellationRequested)
             return (UpdateResult.Canceled, null);
 
+        if (bytes == 0)
+            return (UpdateResult.Closed, "Pipe returned zero bytes.");
+
         if (bytes != expectedBytes)
             return (UpdateResult.Corrupt, $"Expected {expectedBytes} bytes, got {bytes}");
 
         if (gameUpdate.PlayerCount != 0)
         {
             int numBytes = gameUpdate.PlayerCount * ClientGameState.Size;
-            ProcessClientStates(gameUpdate.PlayerCount, memory.Span.Slice(0, numBytes));
+
+            lock (lockObject)
+                ProcessClientStates(gameUpdate.PlayerCount, memory.Span.Slice(0, numBytes));
+
             memory = memory.Slice(numBytes);
         }
 
         if (gameUpdate.RemovedPlayerCount != 0)
         {
             int numBytes = gameUpdate.RemovedPlayerCount * sizeof(ulong);
-            ProcessRemovedPlayers(gameUpdate.RemovedPlayerCount, memory.Span.Slice(0, numBytes));
+
+            lock (lockObject)
+                ProcessRemovedPlayers(gameUpdate.RemovedPlayerCount, memory.Span.Slice(0, numBytes));
+
             memory = memory.Slice(numBytes);
         }
 
         if (gameUpdate.NewPlayerCount != 0)
         {
-            if (!ProcessNewPlayers(gameUpdate.NewPlayerCount, memory.Span.Slice(0, gameUpdate.NewPlayerByteLength)))
-                return (UpdateResult.Corrupt, "Failed to process new players.");
+            lock (lockObject)
+            {
+                if (!ProcessNewPlayers(gameUpdate.NewPlayerCount, memory.Span.Slice(0, gameUpdate.NewPlayerByteLength)))
+                    return (UpdateResult.Corrupt, "Failed to process new players.");
+            }
 
             memory = memory.Slice(gameUpdate.NewPlayerByteLength);
 
@@ -805,7 +952,10 @@ public partial class Plugin
         }
 
         if (gameUpdate.RemovedPlayerCount != 0 || gameUpdate.NewPlayerCount != 0)
-            UpdateWhisperList();
+        {
+            lock (lockObject)
+                UpdateWhisperList();
+        }
 
         return (UpdateResult.OK, null);
     }
@@ -889,13 +1039,10 @@ public partial class Plugin
 
         functions.sendPluginCommand(currentServerId, pluginID, commandBuffer, PluginTargetMode.PluginCommandTarget_CURRENT_CHANNEL, null, null);
 
-        lock (serverChannels)
+        foreach (var channel in serverChannels.Values)
         {
-            foreach (var channel in serverChannels.Values)
-            {
-                if (channel != currentChannel && channel.IsPluginActive && channel.IsSubscribed)
-                    SendCommandToChannelClients(channel, commandBuffer);
-            }
+            if (channel != currentChannel && channel.IsPluginActive && channel.IsSubscribed)
+                SendCommandToChannelClients(channel, commandBuffer);
         }
     }
 
@@ -919,75 +1066,66 @@ public partial class Plugin
             WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to free client list pointer. Error: {err}");
     }
 
-    unsafe void UpdateWhisperList()
+    void UpdateWhisperList()
     {
         if (currentServerId == 0)
             return;
 
         whisperChannels.Clear();
         whisperClients.Clear();
+        usingWhisperList = false;
 
-        Ts3ErrorType err;
-
-        if ((isInGameSession || forceIngame) && currentChannel is { IsPluginActive: true })
+        if (!(isInGameSession || forceIngame) || currentChannel is not { IsPluginActive: true })
         {
-            lock (serverChannels)
-            {
-                whisperChannels.Add(currentChannel);
-
-                foreach (var channel in serverChannels.Values)
-                {
-                    if (channel != currentChannel && channel.IsPluginActive && channel.Clients.Count > 0)
-                    {
-                        if (AllChannelClientsCanReceiveSpatialWhisper(channel))
-                            whisperChannels.Add(channel);
-                        else
-                            whisperClients.AddRange(channel.Clients.Where(c => c.InGameSession && c.PluginVersion >= new PluginVersion(4, 0)));
-                    }
-                }
-
-                if (whisperChannels.Count > 1 || whisperClients.Count > 0)
-                {
-                    ulong* channels = stackalloc ulong[whisperChannels.Count + 1];
-                    int i = 0;
-
-                    for (; i < whisperChannels.Count; i++)
-                        channels[i] = whisperChannels[i].ID;
-
-                    channels[i] = 0; // List terminator
-
-                    ushort* clients = null;
-
-                    if (whisperClients.Count > 0)
-                    {
-                        ushort* c = stackalloc ushort[whisperClients.Count + 1];
-                        clients = c;
-
-                        for (i = 0; i < whisperClients.Count; i++)
-                            clients[i] = whisperClients[i].ClientID;
-
-                        clients[i] = 0; // List terminator
-                    }
-
-                    err = (Ts3ErrorType)functions.requestClientSetWhisperList(currentServerId, localClientId, channels, clients, null);
-
-                    if (err != Ts3ErrorType.ERROR_ok)
-                        WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to set client whisper list. Error: {err}");
-
-                    return;
-                }
-                else
-                {
-                    whisperChannels.Clear();
-                    whisperClients.Clear();
-                }
-            }
+            ClearClientWhisperState(currentServerId, localClientId);
+            return;
         }
 
-        err = (Ts3ErrorType)functions.requestClientSetWhisperList(currentServerId, localClientId, null, null, null);
+        foreach (var channel in serverChannels.Values)
+        {
+            if (!channel.IsPluginActive || !channel.IsSubscribed || channel.Clients.Count == 0)
+                continue;
 
-        if (err != Ts3ErrorType.ERROR_ok)
-            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to set client whisper list. Error: {err}");
+            if (AllChannelClientsCanReceiveSpatialWhisper(channel))
+                whisperChannels.Add(channel);
+            else
+                whisperClients.AddRange(channel.Clients.Where(c => c.InGameSession && c.PluginVersion >= new PluginVersion(4, 0)));
+        }
+
+        if (whisperClients.Count == 0 && whisperChannels.Count == 1 && whisperChannels[0] == currentChannel)
+        {
+            // If the only whisper channel is the current
+            // channel, just clear the whisper list.
+            whisperChannels.Clear();
+            ClearClientWhisperState(currentServerId, localClientId);
+            return;
+        }
+
+        usingWhisperList = true;
+
+        // When there are no whisper channels or clients this will block outgoing audio.
+        unsafe
+        {
+            ulong* channels = stackalloc ulong[whisperChannels.Count + 1];
+            int i = 0;
+
+            for (; i < whisperChannels.Count; i++)
+                channels[i] = whisperChannels[i].ID;
+
+            channels[i] = 0; // List terminator
+
+            ushort* clients = stackalloc ushort[whisperClients.Count + 1];
+
+            for (i = 0; i < whisperClients.Count; i++)
+                clients[i] = whisperClients[i].ClientID;
+
+            clients[i] = 0; // List terminator
+
+            var err = (Ts3ErrorType)functions.requestClientSetWhisperList(currentServerId, localClientId, channels, clients, null);
+
+            if (err != Ts3ErrorType.ERROR_ok)
+                WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to set client whisper list. Error: {err}");
+        }
 
         static bool AllChannelClientsCanReceiveSpatialWhisper(Channel channel)
         {
@@ -1040,22 +1178,19 @@ public partial class Plugin
     {
         WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Removing {numRemovedPlayers} players.");
 
-        lock (clients)
+        for (int i = 0; i < numRemovedPlayers; i++)
         {
-            for (int i = 0; i < numRemovedPlayers; i++)
+            ulong steamId = Read<ulong>(ref bytes);
+            var client = GetClientBySteamId(steamId);
+
+            if (client != null && client.ClientID != 0)
             {
-                ulong steamId = Read<ulong>(ref bytes);
-                var client = GetClientBySteamId(steamId);
+                //WriteConsole($"Resetting client position for ID: {client.ClientID}.");
 
-                if (client != null && client.ClientID != 0)
-                {
-                    //WriteConsole($"Resetting client position for ID: {client.ClientID}.");
+                client.InGameSession = false;
+                client.Position = default;
 
-                    client.InGameSession = false;
-                    client.Position = default;
-
-                    SetClientPos(client.ClientID, default);
-                }
+                UpdateClientPosition(client);
             }
         }
     }
@@ -1124,14 +1259,9 @@ public partial class Plugin
         span = span.Slice(sizeof(T));
     }
 
-    Client? GetClientByClientIdThreadSafe(ushort id)
-    {
-        lock (clients)
-            return GetClientByClientId(id);
-    }
-
     Client? GetClientByClientId(ushort id)
     {
+        // TODO: Use a dictionary lookup.
         foreach (var item in clients)
         {
             if (item.ClientID == id)
@@ -1143,30 +1273,26 @@ public partial class Plugin
 
     Client? GetClientBySteamId(ulong id)
     {
-        lock (clients)
+        foreach (var item in clients)
         {
-            foreach (var item in clients)
-            {
-                if (item.SteamID == id)
-                    return item;
-            }
+            if (item.SteamID == id)
+                return item;
         }
 
         return null;
     }
 
-    Client AddClientThreadSafe(ushort id, Channel channel, string? name)
+    Client AddClient(ushort id, Channel channel)
     {
-        lock (clients)
-            return AddClient(id, channel, name);
-    }
+        var name = GetClientName(channel.ServerID, id);
 
-    Client AddClient(ushort id, Channel channel, string? name)
-    {
+        GetLocalMuteStateForClient(channel.ServerID, id, out bool muted);
+
         var client = new Client {
             ClientID = id,
             ClientName = name,
-            Channel = channel
+            Channel = channel,
+            IsLocallyMuted = muted
         };
 
         clients.Add(client);
@@ -1175,16 +1301,10 @@ public partial class Plugin
         return client;
     }
 
-    void RemoveClientThreadSafe(Client client, bool resetPos)
-    {
-        lock (clients)
-            RemoveClient(client, resetPos);
-    }
-
     void RemoveClient(Client client, bool resetPos)
     {
         if (resetPos)
-            SetClientPos(client.ClientID, default);
+            SetClientPosUnlocked(currentServerId, client.ClientID, default);
 
         client.Channel?.Clients.Remove(client);
 
@@ -1196,106 +1316,158 @@ public partial class Plugin
 
     void RemoveAllClients()
     {
-        lock (clients)
+        if (clients.Count == 0)
         {
-            if (clients.Count == 0)
-            {
-                WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Zero clients to remove.");
-                return;
-            }
-
-            WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Removing all {clients.Count} clients.");
-
-            clients.Clear();
-            // TODO: Does this need to SetClientPos?
+            WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Zero clients to remove.");
+            return;
         }
 
-        lock (serverChannels)
-        {
-            foreach (var channel in serverChannels.Values)
-                channel.Clients.Clear();
-        }
+        WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Removing all {clients.Count} clients.");
+
+        clients.Clear();
+        // TODO: Does this need to SetClientPos?
+
+        foreach (var channel in serverChannels.Values)
+            channel.Clients.Clear();
     }
 
     void UpdateClientPosition(Client client)
     {
-        if (!isInGameSession && client.InGameSession)
+        client.SpatializeMode = GetSpatializeMode(client);
+
+        var pos = client.SpatializeMode switch {
+            SpatializeMode.None => default,
+            SpatializeMode.Mute => new Vector3(float.MaxValue),
+            SpatializeMode.Positional => client.Position,
+            _ => throw new InvalidOperationException(),
+        };
+
+        // TODO: Check if valid client ID.
+        SetClientPosUnlocked(currentServerId, client.ClientID, pos);
+    }
+
+    SpatializeMode GetSpatializeMode(Client client)
+    {
+        if (!isInGameSession)
         {
-            SetClientPos(client.ClientID, new Vector3(float.MaxValue));
-            return;
+            if (client.InGameSession && currentChannel is { IsPluginActive: true })
+                return SpatializeMode.Mute;
+
+            return SpatializeMode.None;
         }
 
-        bool usePosition = false;
+        if (!client.InGameSession)
+        {
+            if (client.Channel == currentChannel && currentChannel is { IsPluginActive: true })
+                return SpatializeMode.Mute;
 
-        if (client.InGameSession && client.Channel is { IsPluginActive: true } cc && currentChannel is { IsPluginActive: true })
+            return SpatializeMode.None;
+        }
+
+        if (client.Channel is { IsPluginActive: true } cc && currentChannel is { IsPluginActive: true })
         {
             bool hasConnection = !useAntennaConnections || client.HasConnection;
 
             if (cc.Mode == ChannelMode.Ingame || (cc.Mode == ChannelMode.Default && cc.Parent is { Mode: ChannelMode.Ingame }))
             {
-                usePosition = true;
+                return SpatializeMode.Positional;
             }
             else if (cc == currentChannel)
             {
-                if (cc.Mode != ChannelMode.AlwaysConnected && !hasConnection)
-                    usePosition = true;
+                if (hasConnection || cc.Mode == ChannelMode.AlwaysConnected)
+                    return SpatializeMode.None;
+                else
+                    return SpatializeMode.Positional;
             }
             else if (cc == currentChannel.Parent)
             {
-                if (cc.Mode == ChannelMode.CrossComms && !hasConnection)
-                    usePosition = true;
+                if (hasConnection || cc.Mode != ChannelMode.CrossComms)
+                    return SpatializeMode.None;
+                else
+                    return SpatializeMode.Positional;
             }
             else if (cc.Parent != null && (cc.Parent == currentChannel || cc.Parent == currentChannel.Parent))
             {
-                if (cc.Parent.Mode != ChannelMode.CrossComms || !hasConnection)
-                    usePosition = true;
+                if (hasConnection && cc.Parent.Mode == ChannelMode.CrossComms)
+                    return SpatializeMode.None;
+                else
+                    return SpatializeMode.Positional;
             }
             else
             {
-                usePosition = true;
+                return SpatializeMode.Positional;
             }
         }
 
-        SetClientPos(client.ClientID, usePosition ? client.Position : default);
+        return SpatializeMode.None;
+    }
+
+    void UpdateAllClientPositions()
+    {
+        // UpdateClientPosition calls SetClientPosUnlocked which
+        // will exit the lock, need to make a copy of the clients
+        // list to avoid modifying it while iterating.
+
+        var clients = this.clients.ToArray();
+        ulong serverId = currentServerId;
+
+        foreach (var client in clients)
+        {
+            UpdateClientPosition(client);
+
+            if (currentServerId != serverId)
+                break;
+        }
     }
 
     void ResetAllClientPositions()
     {
-        lock (clients)
+        var clients = this.clients.ToArray();
+        ulong serverId = currentServerId;
+
+        foreach (var client in clients)
         {
-            foreach (var client in clients)
-            {
-                client.Position = default;
+            client.Position = default;
+            UpdateClientPosition(client);
 
-                var pos = !isInGameSession && client.InGameSession && currentChannel is { IsPluginActive: true }
-                    ? new Vector3(float.MaxValue)
-                    : default;
-
-                SetClientPos(client.ClientID, pos);
-            }
+            if (currentServerId != serverId)
+                break;
         }
+    }
+
+    void ResetClientPositionsUnlocked(ulong serverId, ReadOnlySpan<ushort> clientIds)
+    {
+        lockObject.Exit();
+
+        foreach (var clientId in clientIds)
+            SetClientPos(serverId, clientId, default);
+
+        lockObject.Enter();
+    }
+
+    // THREAD SAFETY:
+    // Calling SetClientPos will block the current thread while TS is
+    // in the CalculateClientVolume callback concurrently.
+    void SetClientPosUnlocked(ulong serverId, ushort clientId, Vector3 pos)
+    {
+        lockObject.Exit();
+
+        SetClientPos(serverId, clientId, pos);
+
+        lockObject.Enter();
     }
 
     void FetchTSClients()
     {
         WriteConsoleAndLog(LogLevel.LogLevel_INFO, "Updating client list.");
 
-        if (currentChannel == null)
+        foreach (var channel in serverChannels.Values)
         {
-            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, "Failed to update client list. Current channel is null.");
-            return;
+            if (channel.IsSubscribed)
+                AddClientsFromChannel(channel);
         }
 
-        lock (serverChannels)
-        {
-            foreach (var channel in serverChannels.Values)
-            {
-                if (channel.IsSubscribed)
-                    AddClientsFromChannel(channel);
-            }
-
-            //AddVisibleClientsForServer(currentServerId);
-        }
+        //AddVisibleClientsForServer(currentServerId);
 
         WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"There are {clients.Count} registered clients.");
     }
@@ -1314,45 +1486,37 @@ public partial class Plugin
         }
 
         int numAdded = 0;
+        var existingClients = clients.ToDictionary(c => c.ClientID, c => c);
 
-        lock (clients)
+        ushort id;
+
+        for (int i = 0; (id = clientList[i]) != 0; i++)
         {
-            var existingClients = clients.ToDictionary(c => c.ClientID, c => c);
+            if (id == localClientId)
+                continue;
 
-            ushort id;
+            if (existingClients.ContainsKey(id))
+                continue;
 
-            for (int i = 0; (id = clientList[i]) != 0; i++)
+            ulong channelId;
+
+            err = (Ts3ErrorType)functions.getChannelOfClient(serverId, id, &channelId);
+
+            if (err != Ts3ErrorType.ERROR_ok)
             {
-                if (id == localClientId)
-                    continue;
-
-                if (existingClients.ContainsKey(id))
-                    continue;
-
-                ulong channelId;
-
-                err = (Ts3ErrorType)functions.getChannelOfClient(serverId, id, &channelId);
-
-                if (err != Ts3ErrorType.ERROR_ok)
-                {
-                    WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to get channelID of client {id}. Error: {err}");
-                    continue;
-                }
-
-                if (!serverChannels.TryGetValue(channelId, out var channel))
-                {
-                    WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to find channel {channelId} of new client {id}. Error: {err}");
-                    continue;
-                }
-
-                var name = GetClientName(serverId, id);
-                var client = AddClient(id, channel, name);
-
-                GetLocalMuteStateForClient(serverId, id, out bool muted);
-                client.IsLocallyMuted = muted;
-
-                numAdded++;
+                WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to get channelID of client {id}. Error: {err}");
+                continue;
             }
+
+            if (!serverChannels.TryGetValue(channelId, out var channel))
+            {
+                WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to find channel {channelId} of new client {id}. Error: {err}");
+                continue;
+            }
+
+            var client = AddClient(id, channel);
+
+            numAdded++;
         }
 
         err = (Ts3ErrorType)functions.freeMemory(clientList);
@@ -1364,10 +1528,9 @@ public partial class Plugin
             WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Added {numAdded} clients.");
     }
 
+    // Adds clients for the given channel that are not already registered.
     unsafe void AddClientsFromChannel(Channel channel)
     {
-        WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Adding clients from channel {channel.ID} '{channel.Name}'.");
-
         ushort* clientList;
         var err = (Ts3ErrorType)functions.getChannelClientList(channel.ServerID, channel.ID, &clientList);
 
@@ -1378,33 +1541,25 @@ public partial class Plugin
         }
 
         int numAdded = 0;
+        ushort id;
 
-        lock (clients)
+        for (int i = 0; (id = clientList[i]) != 0; i++)
         {
-            ushort id;
+            if (id == localClientId)
+                continue;
 
-            for (int i = 0; (id = clientList[i]) != 0; i++)
+            var client = GetClientByClientId(id);
+
+            if (client != null)
             {
-                if (id == localClientId)
-                    continue;
-
                 GetLocalMuteStateForClient(channel.ServerID, id, out bool muted);
-
-                var client = GetClientByClientId(id);
-
-                if (client != null)
-                {
-                    client.IsLocallyMuted = muted;
-                    continue;
-                }
-
-                var name = GetClientName(channel.ServerID, id);
-
-                client = AddClient(id, channel, name);
                 client.IsLocallyMuted = muted;
-
-                numAdded++;
+                continue;
             }
+
+            client = AddClient(id, channel);
+
+            numAdded++;
         }
 
         err = (Ts3ErrorType)functions.freeMemory(clientList);
@@ -1574,7 +1729,7 @@ public partial class Plugin
         {
             switch (cmd.ToLowerInvariant())
             {
-#if DEBUG
+#if USE_OFFLINE_PLAYERS
             case "toggleforceingame":
                 {
                     forceIngame = !forceIngame;
@@ -1602,7 +1757,7 @@ public partial class Plugin
                 {
                     distanceScale = value;
 
-                    if (Set3DSettings(distanceScale, 1))
+                    if (Set3DSettings(currentServerId, distanceScale, rolloffScale: 1))
                         PrintMessageToCurrentTab($"Setting distance scale to {value}");
                     else
                         PrintMessageToCurrentTab($"Error, failed to set distance scale value.");
@@ -1654,66 +1809,150 @@ public partial class Plugin
         }
     }
 
-    [MemberNotNullWhen(true, nameof(currentChannel))]
-    bool UpdateLocalClientIdAndChannel(ulong serverId)
+    void OnCurrentServerChanged(ulong serverId)
     {
-        if (!GetLocalClientAndChannelIds(serverId, out localClientId, out ulong channelId))
-            return false;
+        if (serverId == currentServerId)
+            return;
 
-        lock (serverChannels)
+        ulong oldServerId = currentServerId;
+
+        if (oldServerId != 0)
         {
-            if (!serverChannels.TryGetValue(channelId, out currentChannel))
-            {
-                WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to find current channel with ID {channelId}.");
-                return false;
-            }
+            if (localClientId != 0)
+                ClearClientWhisperState(oldServerId, localClientId);
+
+            ResetClientPositionsUnlocked(oldServerId, clients.Select(c => c.ClientID).ToArray());
+
+            ClearCurrentServerState();
         }
 
-        return true;
+        currentServerId = serverId;
+
+        if (serverId == 0)
+            return;
+
+        ConnectStatus status;
+        Ts3ErrorType err;
+
+        unsafe { err = (Ts3ErrorType)functions.getConnectionStatus(serverId, &status); }
+
+        if (err != Ts3ErrorType.ERROR_ok)
+        {
+            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to get connection status for server {serverId}. Error: {err}");
+            return;
+        }
+
+        if (status == ConnectStatus.STATUS_CONNECTION_ESTABLISHED)
+            InitializeConnectedServer(serverId);
     }
 
-    void OnServerDisconnected()
+    void OnServerConnectStatusChanged(ulong serverId, ConnectStatus newStatus, uint errorNumber)
+    {
+        //WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"ConnectStatusChangeEvent. NewStatus: {newStatus}");
+
+        switch (newStatus)
+        {
+        case ConnectStatus.STATUS_DISCONNECTED:
+            OnServerDisconnected(serverId);
+            break;
+        case ConnectStatus.STATUS_CONNECTED: // Local client ID available.
+            {
+                WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Connected to server {serverId}.");
+
+                if (serverId != currentServerId)
+                    break;
+
+                GetLocalClientId(serverId, out localClientId);
+                WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Got local client ID: {localClientId}.");
+
+                break;
+            }
+        case ConnectStatus.STATUS_CONNECTION_ESTABLISHING: // Channel path to local client available.
+            {
+                WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Connection establishing for server {serverId}.");
+
+                if (serverId != currentServerId)
+                    break;
+
+                if (!GetClientChannelId(serverId, localClientId, out ulong channelId))
+                    break;
+
+                WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Got current channel ID: {channelId}.");
+
+                if (!serverChannels.TryGetValue(channelId, out currentChannel))
+                    WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to find current channel with ID {channelId}.");
+
+                break;
+            }
+        case ConnectStatus.STATUS_CONNECTION_ESTABLISHED: // All channels available.
+            {
+                WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Connection established for server {serverId}.");
+
+                if (serverId == currentServerId)
+                    InitializeConnectedServer(serverId);
+
+                // TODO: Handle multiple server connections.
+                break;
+            }
+        }
+    }
+
+    void OnServerDisconnected(ulong serverId)
+    {
+        WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Disconnected from server {serverId}.");
+
+        if (serverId == currentServerId)
+            ClearCurrentServerState();
+    }
+
+    void ClearCurrentServerState()
     {
         localClientId = 0;
         RemoveAllClients();
         currentChannel = null;
-
+        serverChannels.Clear();
         whisperChannels.Clear();
         whisperClients.Clear();
-
-        lock (serverChannels)
-            serverChannels.Clear();
+        usingWhisperList = false;
     }
 
+    // When receiving channels during server join.
     void OnNewChannel(ulong serverId, ulong channelId, ulong channelParentId)
     {
         if (serverId != currentServerId)
             return;
 
-        lock (serverChannels)
-            RegisterChannel(serverId, channelId, channelParentId);
+        if (serverChannels.TryGetValue(channelId, out var existing))
+        {
+            WriteConsoleAndLog(LogLevel.LogLevel_WARNING, $"New received channel {channelId} '{existing.Name}' already exists.");
+            return;
+        }
+
+        RegisterChannel(serverId, channelId, channelParentId);
     }
 
+    // When a channel is created while connected to a server. No clients will be in the channel yet.
     unsafe void OnNewChannelCreated(ulong serverId, ulong channelId, ulong channelParentId,
         ushort invokerId, byte* invokerName, byte* invokerUniqueIdentifier)
     {
         if (serverId != currentServerId)
             return;
 
-        Channel? channel;
+        if (serverChannels.TryGetValue(channelId, out var existing))
+        {
+            WriteConsoleAndLog(LogLevel.LogLevel_WARNING, $"New created channel {channelId} '{existing.Name}' already exists.");
+            return;
+        }
 
-        lock (serverChannels)
-            channel = RegisterChannel(serverId, channelId, channelParentId);
+        var channel = RegisterChannel(serverId, channelId, channelParentId);
 
         if (channel == null || channel.Parent is not { IsPluginActive: true })
             return;
 
         channel.IsPluginActive = true;
 
-        if (currentChannel != null && channel.IsSubscribed)
-            SendLocalInfoToChannel(channel);
-
-        UpdateWhisperList();
+        if (!channel.IsSubscribed)
+            SubscribeToChannels(serverId, [channelId]);
     }
 
     Channel? RegisterChannel(ulong serverId, ulong channelId, ulong channelParentId)
@@ -1741,13 +1980,15 @@ public partial class Plugin
             ID = channelId,
             Name = name,
             Parent = parent,
-            IsSubscribed = isSubscribed
+            IsSubscribed = isSubscribed // NOTE: A client is automatically subscribed to the current channel.
         };
 
         channel.SetTopic(topic);
 
         serverChannels.Add(channelId, channel);
         parent?.Children.Add(channel);
+
+        WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Registered channel {channelId} '{name}' with parent {channelParentId}. IsSubscribed={isSubscribed}");
 
         return channel;
     }
@@ -1758,19 +1999,26 @@ public partial class Plugin
         if (serverId != currentServerId)
             return;
 
-        lock (serverChannels)
+        if (!serverChannels.Remove(channelId, out var channel))
         {
-            if (!serverChannels.Remove(channelId, out var channel))
-            {
-                WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Channel {channelId} was missing when removing.");
-                return;
-            }
-
-            channel.Parent?.Children.Remove(channel);
-
-            if (channel.IsPluginActive)
-                UpdateWhisperList();
+            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Channel {channelId} was missing when removing.");
+            return;
         }
+
+        channel.Parent?.Children.Remove(channel);
+
+        if (channel.Clients.Count > 0)
+        {
+            WriteConsoleAndLog(LogLevel.LogLevel_WARNING, $"Deleted channel {channelId} still has {channel.Clients.Count} clients in it.");
+
+            foreach (var item in channel.Clients)
+                item.Channel = null;
+
+            channel.Clients.Clear();
+        }
+
+        if (channel.IsPluginActive)
+            UpdateWhisperList();
     }
 
     unsafe void OnChannelMoved(ulong serverId, ulong channelId, ulong newChannelParentId,
@@ -1779,31 +2027,32 @@ public partial class Plugin
         if (serverId != currentServerId)
             return;
 
-        lock (serverChannels)
+        if (!serverChannels.TryGetValue(channelId, out var channel))
         {
-            if (!serverChannels.TryGetValue(channelId, out var channel))
+            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Channel {channelId} was missing when removing.");
+            return;
+        }
+
+        var oldParent = channel.Parent;
+
+        oldParent?.Children.Remove(channel);
+        channel.Parent = null;
+
+        if (newChannelParentId != 0) // Root channels have parent ID of 0.
+        {
+            if (serverChannels.TryGetValue(newChannelParentId, out var newParent))
             {
-                WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Channel {channelId} was missing when removing.");
-                return;
+                channel.Parent = newParent;
+                newParent.Children.Add(channel);
             }
-
-            var oldParent = channel.Parent;
-
-            oldParent?.Children.Remove(channel);
-            channel.Parent = null;
-
-            if (!serverChannels.TryGetValue(newChannelParentId, out var newParent))
+            else
             {
                 WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"New parent channel {newChannelParentId} of channel {channelId} was missing.");
-                return;
             }
-
-            channel.Parent = newParent;
-            newParent.Children.Add(channel);
-
-            //UnsubscribeFromActiveChannels();
-            UpdateActiveChannels();
         }
+
+        //UnsubscribeFromActiveChannels();
+        UpdateActiveChannels();
     }
 
     unsafe void OnChannelEdited(ulong serverId, ulong channelId,
@@ -1814,11 +2063,8 @@ public partial class Plugin
 
         Channel? channel;
 
-        lock (serverChannels)
-        {
-            if (!serverChannels.TryGetValue(channelId, out channel))
-                return;
-        }
+        if (!serverChannels.TryGetValue(channelId, out channel))
+            return;
 
         var oldMode = channel.Mode;
 
@@ -1831,64 +2077,71 @@ public partial class Plugin
         UpdateActiveChannels();
     }
 
-    void OnLocalChannelChanged(ulong oldChannelId)
+    void OnCurrentChannelChanged(ulong oldChannelId)
     {
         if (oldChannelId != 0)
         {
-            Channel? oldChannel;
-
-            lock (serverChannels)
+            if (!serverChannels.TryGetValue(oldChannelId, out var oldChannel))
             {
-                serverChannels.TryGetValue(oldChannelId, out oldChannel);
-
-                if (oldChannel != null && !DoesChannelExist(oldChannel.ServerID, oldChannel.ID))
-                    serverChannels.Remove(oldChannel.ID); // May have moved out of a temporary channel
-            }
-
-            if (oldChannel == null)
                 WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to find old channel {oldChannelId}");
-            //else
-            //    UnsubscribeFromActiveChannels();
+            }
+            else if (!DoesChannelExist(oldChannel.ServerID, oldChannel.ID))
+            {
+                if (oldChannel.Clients.Count > 0)
+                {
+                    WriteConsoleAndLog(LogLevel.LogLevel_WARNING, $"Old current channel {oldChannel.ID} still has {oldChannel.Clients.Count} clients in it.");
+
+                    foreach (var item in oldChannel.Clients)
+                        item.Channel = null;
+
+                    oldChannel.Clients.Clear();
+                }
+
+                serverChannels.Remove(oldChannel.ID); // May have moved out of a temporary channel
+            }
         }
 
-        if (currentChannel != null && !currentChannel.IsSubscribed)
+        if (currentChannel != null)
+        {
+            currentChannel.IsSubscribed = true;
             FetchTSClients();
+        }
 
+        //UnsubscribeFromActiveChannels();
         UpdateActiveChannels();
     }
 
+    // TODO: Fix or remove this as it can unsubscribe from
+    // channels that the user explicitly subscribed to.
     void UnsubscribeFromActiveChannels()
     {
-        lock (serverChannels)
+        var ids = new List<ulong>(serverChannels.Count);
+
+        foreach (var channel in serverChannels.Values)
         {
-            var ids = new List<ulong>(serverChannels.Count);
-
-            foreach (var channel in serverChannels.Values)
+            if (channel.IsPluginActive)
             {
-                if (channel.IsPluginActive)
-                {
-                    channel.IsPluginActive = false;
+                channel.IsPluginActive = false;
 
-                    if (DoesChannelExist(channel.ServerID, channel.ID))
-                        ids.Add(channel.ID);
-                }
+                if (DoesChannelExist(channel.ServerID, channel.ID))
+                    ids.Add(channel.ID);
             }
-
-            if (ids.Count > 0)
-                UnsubscribeFromChannels(currentServerId, CollectionsMarshal.AsSpan(ids));
         }
+
+        if (ids.Count > 0)
+            UnsubscribeFromChannels(currentServerId, CollectionsMarshal.AsSpan(ids));
     }
 
     void UpdateActiveChannels()
     {
+        foreach (var channel in serverChannels.Values)
+            channel.IsPluginActive = false;
+
         Channel? root = null;
         Channel? c = currentChannel;
-        int n = 0;
 
         while (c != null)
         {
-            n++;
-
             if (c.Mode == ChannelMode.Ingame)
                 root = c;
 
@@ -1898,9 +2151,9 @@ public partial class Plugin
             c = c.Parent;
         }
 
-        if (root != null && root.Mode == ChannelMode.Ingame)
+        if (root != null)
         {
-            var ids = new List<ulong>(n);
+            var ids = new List<ulong>();
 
             root.IsPluginActive = true;
 
@@ -1923,14 +2176,7 @@ public partial class Plugin
             SendLocalInfoToActiveChannels();
 
         UpdateWhisperList();
-
-        Client[] clients;
-
-        lock (this.clients)
-            clients = [.. this.clients];
-
-        foreach (var client in clients)
-            UpdateClientPosition(client);
+        UpdateAllClientPositions();
     }
 
     void OnChannelSubscribed(ulong serverId, ulong channelId)
@@ -1939,27 +2185,33 @@ public partial class Plugin
             return;
 
         Channel? channel;
-        bool wasSubscribed = false;
 
-        lock (serverChannels)
+        if (!serverChannels.TryGetValue(channelId, out channel))
         {
-            if (serverChannels.TryGetValue(channelId, out channel))
-            {
-                wasSubscribed = channel.IsSubscribed;
-                channel.IsSubscribed = true;
-            }
+            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Unregistered channel subscribed. ID: {channelId}");
+            return;
         }
 
-        if (channel == null)
-            return;
+        bool wasSubscribed = channel.IsSubscribed;
+        channel.IsSubscribed = true;
+
+        WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Channel subscribed. ID: {channel.ID}, Name: {channel.Name}");
+
+        // NOTE: The following work may be redundant as it should
+        // be handled in OnClientMoveSubscriptionEvent.
 
         if (!wasSubscribed)
             AddClientsFromChannel(channel);
 
         if (channel.IsPluginActive)
+        {
             SendLocalInfoToChannel(channel);
+            UpdateWhisperList();
+        }
     }
 
+    // This event is called to mark the end of multiple calls to
+    // onChannelSubscribeEvent when subscribing to several channels.
     void OnChannelSubscribeFinished(ulong serverId)
     {
     }
@@ -1969,35 +2221,93 @@ public partial class Plugin
         if (serverId != currentServerId)
             return;
 
-        lock (serverChannels)
+        if (!serverChannels.TryGetValue(channelId, out var channel))
         {
-            if (!serverChannels.TryGetValue(channelId, out var channel))
-                return;
-
-            channel.IsSubscribed = false;
-
-            lock (clients)
-            {
-                foreach (var client in channel.Clients)
-                {
-                    client.Channel = null;
-                    RemoveClient(client, resetPos: false);
-                }
-
-                channel.Clients.Clear();
-            }
+            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Unregistered channel unsubscribed. ID: {channelId}");
+            return;
         }
+
+        channel.IsSubscribed = false;
+
+        WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Channel unsubscribed. ID: {channel.ID}, Name: {channel.Name}");
+
+        // TS does not send events for clients leaving visibility when
+        // unsubscribing from a channel, so they must be removed here.
+        foreach (var client in channel.Clients)
+        {
+            // Prevent RemoveClient from modifying channel.Clients.
+            client.Channel = null;
+
+            WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"  Removing client. ID: {client.ClientID}, Name: {client.ClientName}");
+            RemoveClient(client, resetPos: false);
+        }
+
+        channel.Clients.Clear();
 
         UpdateWhisperList();
     }
 
+    // This event is a convinience callback to mark the
+    // end of multiple calls to onChannelUnsubscribeEvent.
     void OnChannelUnsubscribeFinished(ulong serverId)
     {
     }
 
+    /// <summary>
+    /// Docs say:        Called for each client in a channel after [un]subscribed.
+    /// Actual behavior: Only called when subscribing to a channel, before OnChannelSubscribed.
+    /// </summary>
+    /// <param name="oldChannelId">ID of the subscribed channel where the client left visibility.</param>
+    /// <param name="newChannelId">ID of the subscribed channel where the client entered visibility.</param>
     void OnClientMoveSubscriptionEvent(ulong serverId, ushort clientId,
         ulong oldChannelId, ulong newChannelId, Visibility visibility)
     {
+        if (serverId != currentServerId || clientId == localClientId)
+            return;
+
+        if (visibility == Visibility.ENTER_VISIBILITY)
+        {
+            if (!serverChannels.TryGetValue(newChannelId, out var channel))
+            {
+                WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Client entered visibility for unregistered channel. ID: {clientId}, OldChannelID: {oldChannelId}, NewChannelID: {newChannelId}");
+                return;
+            }
+
+            var client = GetClientByClientId(clientId);
+
+            if (client != null)
+            {
+                WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Client entered visibility. ID: {clientId}, Name: {client.ClientName}, OldChannelID: {oldChannelId}, NewChannelID: {newChannelId}");
+            }
+            else
+            {
+                client = AddClient(clientId, channel);
+
+                WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"New client entered visibility. ID: {clientId}, Name: {client.ClientName}, OldChannelID: {oldChannelId}, NewChannelID: {newChannelId}");
+            }
+
+            if (channel.IsPluginActive)
+                SendLocalInfoToClient(client);
+
+            UpdateWhisperList();
+            UpdateClientPosition(client);
+        }
+        else if (visibility == Visibility.LEAVE_VISIBILITY)
+        {
+            var client = GetClientByClientId(clientId);
+
+            // Client may have already been unregistered by OnChannelUnsubscribed.
+            if (client == null)
+            {
+                WriteConsoleAndLog(LogLevel.LogLevel_WARNING, $"Client left visibility. ID: {clientId}, OldChannelID: {oldChannelId}, NewChannelID: {newChannelId}");
+                return;
+            }
+
+            WriteConsoleAndLog(LogLevel.LogLevel_WARNING, $"Client left visibility. ID: {clientId}, Name: {client.ClientName}, OldChannelID: {oldChannelId}, NewChannelID: {newChannelId}");
+
+            RemoveClient(client, resetPos: false);
+            UpdateWhisperList();
+        }
     }
 
     void HandleClientMoved(ulong serverId, ushort clientID, ulong oldChannelID, ulong newChannelID)
@@ -2005,13 +2315,8 @@ public partial class Plugin
         if (serverId != currentServerId)
             return;
 
-        Channel? oldChannel, newChannel;
-
-        lock (serverChannels)
-        {
-            serverChannels.TryGetValue(oldChannelID, out oldChannel);
-            serverChannels.TryGetValue(newChannelID, out newChannel);
-        }
+        serverChannels.TryGetValue(oldChannelID, out var oldChannel);
+        serverChannels.TryGetValue(newChannelID, out var newChannel);
 
         if (clientID == localClientId)
         {
@@ -2022,7 +2327,7 @@ public partial class Plugin
             if (newChannelID != 0)
             {
                 if (currentChannel != null)
-                    OnLocalChannelChanged(oldChannelID);
+                    OnCurrentChannelChanged(oldChannelID);
                 else
                     WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to find new channel with ID {newChannelID}.");
             }
@@ -2030,7 +2335,7 @@ public partial class Plugin
             return;
         }
 
-        var client = GetClientByClientIdThreadSafe(clientID);
+        var client = GetClientByClientId(clientID);
 
         if (newChannel == null)
         {
@@ -2038,7 +2343,7 @@ public partial class Plugin
             {
                 WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Client left server. ClientID: {clientID}, ClientName: {client.ClientName}, OldChannelID: {oldChannelID}, NewChannelID: {newChannelID}");
 
-                RemoveClientThreadSafe(client, resetPos: false);
+                RemoveClient(client, resetPos: false);
                 UpdateWhisperList();
             }
             else
@@ -2061,15 +2366,13 @@ public partial class Plugin
         {
             if (client != null)
             {
-                WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Client joined current/subscribed channel. ClientID: {clientID}, ClientName: {client.ClientName}, OldChannelID: {oldChannelID}, NewChannelID: {newChannelID}");
+                WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Client joined subscribed channel. ClientID: {clientID}, ClientName: {client.ClientName}, OldChannelID: {oldChannelID}, NewChannelID: {newChannelID}");
             }
             else
             {
-                var name = GetClientName(serverId, clientID);
+                client = AddClient(clientID, newChannel);
 
-                WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"New client joined current/subscribed channel. ClientID: {clientID}, ClientName: {name}, OldChannelID: {oldChannelID}, NewChannelID: {newChannelID}");
-
-                client = AddClientThreadSafe(clientID, newChannel, name);
+                WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"New client in subscribed channel. ClientID: {clientID}, ClientName: {client.ClientName}, OldChannelID: {oldChannelID}, NewChannelID: {newChannelID}");
             }
 
             UpdateWhisperList();
@@ -2079,12 +2382,14 @@ public partial class Plugin
         {
             if (client != null)
             {
-                WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Client left current/subscribed channel. ClientID: {clientID}, ClientName: {client.ClientName}, OldChannelID: {oldChannelID}, NewChannelID: {newChannelID}");
+                WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Client  left  subscribed channel. ClientID: {clientID}, ClientName: {client.ClientName}, OldChannelID: {oldChannelID}, NewChannelID: {newChannelID}");
+
+                RemoveClient(client, resetPos: false);
                 UpdateWhisperList();
             }
             else
             {
-                WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Unregistered client left current/subscribed channel. ClientID: {clientID}, OldChannelID: {oldChannelID}, NewChannelID: {newChannelID}");
+                WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Unregistered client left subscribed channel. ClientID: {clientID}, OldChannelID: {oldChannelID}, NewChannelID: {newChannelID}");
             }
         }
         else
@@ -2104,7 +2409,7 @@ public partial class Plugin
         {
             // If the local client starts a whisper on their own it will clear
             // the one set by the plugin. This re-applies it when they stop.
-            if (UsingWhisperList ? status == TalkStatus.STATUS_NOT_TALKING : (status == talkStatus && !isReceivedWhisper))
+            if (usingWhisperList ? status == TalkStatus.STATUS_NOT_TALKING : (status == talkStatus && !isReceivedWhisper))
                 UpdateWhisperList();
 
             talkStatus = status;
@@ -2112,7 +2417,7 @@ public partial class Plugin
             return;
         }
 
-        var client = GetClientByClientIdThreadSafe(clientId);
+        var client = GetClientByClientId(clientId);
 
         if (client == null)
             return;
@@ -2129,16 +2434,35 @@ public partial class Plugin
 
     void CalculateClientVolume(ushort clientId, ref float volume)
     {
-        var client = GetClientByClientIdThreadSafe(clientId);
+        volume = 1;
 
-        if (client == null)
-            return;
+        SpatializeMode mode;
+        bool extendRange;
+        Vector3 position;
 
-        if (!isInGameSession && client.InGameSession && currentChannel is { IsPluginActive: true })
+        lock (lockObject)
+        {
+            var client = GetClientByClientId(clientId);
+
+            if (client == null)
+                return;
+
+            mode = client.SpatializeMode;
+            extendRange = client.ExtendRange;
+            position = client.Position;
+        }
+
+        switch (mode)
+        {
+        case SpatializeMode.Mute:
             volume = 0;
-
-        if (client.Position == default)
             return;
+        case SpatializeMode.Positional:
+            break;
+        case SpatializeMode.None:
+        default:
+            return;
+        }
 
         // TODO: Scale volume down when client is facing away
 
@@ -2147,13 +2471,13 @@ public partial class Plugin
         float scale = distanceScale;
         float falloff = distanceFalloff;
 
-        if (client.ExtendRange)
+        if (extendRange)
         {
             maxDist *= extendRangeFactor;
             falloff /= extendRangeFactor;
         }
 
-        float dist = Vector3.Distance(default, client.Position);
+        float dist = Vector3.Distance(default, position);
         float vol = float.Min(1f, 1f / float.Pow(dist * scale + 1 - minD * scale, (float)falloff));
 
         float limit = dist / maxDist;
@@ -2189,11 +2513,11 @@ public partial class Plugin
         }
     }
 
-    bool Set3DSettings(float distanceFactor, float rolloffScale)
+    bool Set3DSettings(ulong serverId, float distanceFactor, float rolloffScale)
     {
-        WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Setting system 3D settings. DistanceFactor: {distanceFactor}, RolloffScale: {rolloffScale}.");
+        WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Setting system 3D settings for server {serverId}. DistanceFactor: {distanceFactor}, RolloffScale: {rolloffScale}.");
 
-        var err = (Ts3ErrorType)functions.systemset3DSettings(currentServerId, distanceFactor, rolloffScale);
+        var err = (Ts3ErrorType)functions.systemset3DSettings(serverId, distanceFactor, rolloffScale);
 
         if (err != Ts3ErrorType.ERROR_ok)
         {
@@ -2204,19 +2528,19 @@ public partial class Plugin
         return true;
     }
 
-    unsafe void SetListener(Vector3 forward, Vector3 up)
+    unsafe void SetListener(ulong serverId, Vector3 forward, Vector3 up)
     {
         //WriteConsole($"Setting listener attribs. Forward: {forward}, Up: {up}.");
 
         Vector3 zeroPos = default;
 
-        var err = (Ts3ErrorType)functions.systemset3DListenerAttributes(currentServerId, (TS3_VECTOR*)&zeroPos, (TS3_VECTOR*)&forward, (TS3_VECTOR*)&up);
+        var err = (Ts3ErrorType)functions.systemset3DListenerAttributes(serverId, (TS3_VECTOR*)&zeroPos, (TS3_VECTOR*)&forward, (TS3_VECTOR*)&up);
 
         if (err != Ts3ErrorType.ERROR_ok)
             WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to set listener attribs. Error: {err}");
     }
 
-    unsafe void SetClientPos(ushort clientId, Vector3 position)
+    unsafe void SetClientPos(ulong serverId, ushort clientId, Vector3 position)
     {
         if (clientId == 0)
         {
@@ -2226,44 +2550,46 @@ public partial class Plugin
 
         //WriteConsole($"Setting position of client {clientId} to {position}.");
 
-        position.Z = -position.Z;
+        if (position.Z != 0)
+            position.Z = -position.Z;
 
-        var err = (Ts3ErrorType)functions.channelset3DAttributes(currentServerId, clientId, (TS3_VECTOR*)&position);
+        var err = (Ts3ErrorType)functions.channelset3DAttributes(serverId, clientId, (TS3_VECTOR*)&position);
 
         if (err != Ts3ErrorType.ERROR_ok)
             WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to set client pos to {position}. Error: {err}");
     }
 
-    unsafe bool GetLocalClientAndChannelIds(ulong serverId, out ushort clientId, out ulong channelId)
+    unsafe bool GetLocalClientId(ulong serverId, out ushort clientId)
     {
-        clientId = 0;
-        channelId = 0;
-
         ushort clientID;
         var err = (Ts3ErrorType)functions.getClientID(serverId, &clientID);
 
         if (err == Ts3ErrorType.ERROR_ok)
         {
             clientId = clientID;
-            WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Got client ID: {clientID}");
+            return true;
         }
         else
         {
+            clientId = 0;
             WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to get client ID. Error: {err}");
             return false;
         }
+    }
 
+    unsafe bool GetClientChannelId(ulong serverId, ushort clientId, out ulong channelId)
+    {
         ulong channelID;
-        err = (Ts3ErrorType)functions.getChannelOfClient(serverId, clientID, &channelID);
+        var err = (Ts3ErrorType)functions.getChannelOfClient(serverId, clientId, &channelID);
 
         if (err != Ts3ErrorType.ERROR_ok)
         {
-            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to get channel ID. Error: {err}");
+            channelId = 0;
+            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to get channel ID for client {clientId}. Error: {err}");
             return false;
         }
 
         channelId = channelID;
-        WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"Got channel ID: {channelID}");
 
         return true;
     }
@@ -2301,7 +2627,7 @@ public partial class Plugin
         return err;
     }
 
-    unsafe bool GetChannelName(ulong serverId, ulong channelId, [NotNullWhen(true)] out string? name)
+    bool GetChannelName(ulong serverId, ulong channelId, [NotNullWhen(true)] out string? name)
     {
         var err = GetChannelStringProperty(serverId, channelId, ChannelProperties.CHANNEL_NAME, out name);
 
@@ -2313,7 +2639,7 @@ public partial class Plugin
         return false;
     }
 
-    unsafe bool GetChannelTopic(ulong serverId, ulong channelId, [NotNullWhen(true)] out string? topic)
+    bool GetChannelTopic(ulong serverId, ulong channelId, [NotNullWhen(true)] out string? topic)
     {
         var err = GetChannelStringProperty(serverId, channelId, ChannelProperties.CHANNEL_TOPIC, out topic);
 
@@ -2362,7 +2688,7 @@ public partial class Plugin
     unsafe bool GetLocalMuteStateForClient(ulong serverId, ushort clientId, out bool muted)
     {
         int mutedState;
-        var err = (Ts3ErrorType)functions.getClientVariableAsInt(serverId, clientId, (int)ClientProperties.CLIENT_IS_MUTED, &mutedState);
+        var err = (Ts3ErrorType)functions.getClientVariableAsInt(serverId, clientId, (nint)ClientProperties.CLIENT_IS_MUTED, &mutedState);
 
         if (err != Ts3ErrorType.ERROR_ok)
         {
@@ -2436,13 +2762,13 @@ public partial class Plugin
         return parentChannel;
     }
 
-    unsafe bool SubscribeToChannels(ulong serverId, ReadOnlySpan<ulong> channelIds)
+    unsafe bool SubscribeToChannels(ulong serverId, ReadOnlySpan<ulong> channelIds, IntPtr returnCode = 0)
     {
         ulong* channelList = stackalloc ulong[channelIds.Length + 1];
         channelList[channelIds.Length] = 0;
         channelIds.CopyTo(new Span<ulong>(channelList, channelIds.Length));
 
-        var err = (Ts3ErrorType)functions.requestChannelSubscribe(serverId, channelList, null);
+        var err = (Ts3ErrorType)functions.requestChannelSubscribe(serverId, channelList, (byte*)returnCode);
 
         if (err == Ts3ErrorType.ERROR_ok)
             return true;
@@ -2455,13 +2781,13 @@ public partial class Plugin
         return false;
     }
 
-    unsafe bool UnsubscribeFromChannels(ulong serverId, ReadOnlySpan<ulong> channelIds)
+    unsafe bool UnsubscribeFromChannels(ulong serverId, ReadOnlySpan<ulong> channelIds, IntPtr returnCode = 0)
     {
         ulong* channelList = stackalloc ulong[channelIds.Length + 1];
         channelList[channelIds.Length] = 0;
         channelIds.CopyTo(new Span<ulong>(channelList, channelIds.Length));
 
-        var err = (Ts3ErrorType)functions.requestChannelUnsubscribe(serverId, channelList, null);
+        var err = (Ts3ErrorType)functions.requestChannelUnsubscribe(serverId, channelList, (byte*)returnCode);
 
         if (err == Ts3ErrorType.ERROR_ok)
             return true;
@@ -2495,6 +2821,14 @@ public partial class Plugin
         return topic;
     }
 
+    unsafe void ClearClientWhisperState(ulong serverId, ushort clientId)
+    {
+        var err = (Ts3ErrorType)functions.requestClientSetWhisperList(serverId, clientId, null, null, null);
+
+        if (err != Ts3ErrorType.ERROR_ok)
+            WriteConsoleAndLog(LogLevel.LogLevel_ERROR, $"Failed to clear whisper list for local client {clientId}. Error: {err}");
+    }
+
     unsafe void PrintMessageToCurrentTab(string message)
     {
         IntPtr ptr = Marshal.StringToCoTaskMemUTF8(message);
@@ -2516,17 +2850,17 @@ public partial class Plugin
     #region Required functions
 #pragma warning disable IDE1006 // Naming Styles
 
-    [UnmanagedCallersOnly(EntryPoint = "ts3plugin_name")] public unsafe static byte* ts3plugin_name() => (byte*)PluginNamePtr;
-    [UnmanagedCallersOnly(EntryPoint = "ts3plugin_version")] public unsafe static byte* ts3plugin_version() => (byte*)PluginVersionPtr;
-    [UnmanagedCallersOnly(EntryPoint = "ts3plugin_apiVersion")] public unsafe static int ts3plugin_apiVersion() => 26;
-    [UnmanagedCallersOnly(EntryPoint = "ts3plugin_author")] public unsafe static byte* ts3plugin_author() => (byte*)PluginAuthorPtr;
+    [UnmanagedCallersOnly(EntryPoint = "ts3plugin_apiVersion")]  public static int ts3plugin_apiVersion() => 26;
+    [UnmanagedCallersOnly(EntryPoint = "ts3plugin_name")]        public unsafe static byte* ts3plugin_name()        => (byte*)PluginNamePtr;
+    [UnmanagedCallersOnly(EntryPoint = "ts3plugin_version")]     public unsafe static byte* ts3plugin_version()     => (byte*)PluginVersionPtr;
+    [UnmanagedCallersOnly(EntryPoint = "ts3plugin_author")]      public unsafe static byte* ts3plugin_author()      => (byte*)PluginAuthorPtr;
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_description")] public unsafe static byte* ts3plugin_description() => (byte*)PluginDescriptionPtr;
-    [UnmanagedCallersOnly(EntryPoint = "ts3plugin_setFunctionPointers")] public unsafe static void ts3plugin_setFunctionPointers(TS3Functions funcs) => instance.functions = funcs;
+    [UnmanagedCallersOnly(EntryPoint = "ts3plugin_setFunctionPointers")] public static void ts3plugin_setFunctionPointers(TS3Functions funcs) => instance.functions = funcs;
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_init")]
     public static int ts3plugin_init()
     {
-        instance.Init();
+        instance.OnInit();
 
         // 0 = success, 1 = failure, -2 = failure but client will not show a "failed to load" warning
         // -2 is a very special case and should only be used if a plugin displays a dialog (e.g. overlay) asking the user to disable
@@ -2540,17 +2874,17 @@ public partial class Plugin
     public unsafe static void ts3plugin_shutdown()
     {
         // Note:
-        // If your plugin implements a settings dialog, it must be closed and deleted here, else the
+        // If the plugin implements a settings dialog, it must be closed and deleted here, else the
         // TeamSpeak client will most likely crash (DLL removed but dialog from DLL code still open).
 
-        // Free pluginID if we registered it
+        instance.Dispose();
+
+        // Free pluginID if it was registered
         if (instance.pluginID != null)
         {
             NativeMemory.Free(instance.pluginID);
             instance.pluginID = null;
         }
-
-        instance.Dispose();
     }
 
     #endregion
@@ -2569,6 +2903,8 @@ public partial class Plugin
         Unsafe.CopyBlock(instance.pluginID, id, sz);
 
         instance.WriteConsoleAndLog(LogLevel.LogLevel_INFO, "Registered plugin ID: " + Encoding.UTF8.GetString(charSpan));
+
+        instance.OnPluginIDRegistered();
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_commandKeyword")]
@@ -2586,62 +2922,50 @@ public partial class Plugin
         if (cmd == null)
             return 1;
 
-        return instance.ProcessCommand(cmd);
+        lock (instance.lockObject)
+            return instance.ProcessCommand(cmd);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_currentServerConnectionChanged")]
     public static void ts3plugin_currentServerConnectionChanged(ulong serverConnectionHandlerID)
     {
-        instance.currentServerId = serverConnectionHandlerID;
+        lock (instance.lockObject)
+            instance.OnCurrentServerChanged(serverConnectionHandlerID);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onConnectStatusChangeEvent")]
     public static void ts3plugin_onConnectStatusChangeEvent(ulong serverConnectionHandlerID, int newStatus, uint errorNumber)
     {
-        //WriteConsoleAndLog(LogLevel.LogLevel_INFO, $"ConnectStatusChangeEvent. NewStatus: {newStatus}");
-
-        if (serverConnectionHandlerID != instance.currentServerId)
-            return;
-
-        var connStatus = (ConnectStatus)newStatus;
-
-        if (connStatus == ConnectStatus.STATUS_DISCONNECTED)
-        {
-            instance.OnServerDisconnected();
-        }
-        else if (connStatus == ConnectStatus.STATUS_CONNECTION_ESTABLISHED)
-        {
-            if (instance.UpdateLocalClientIdAndChannel(serverConnectionHandlerID))
-            {
-                instance.Set3DSettings(instance.distanceScale, 1);
-                instance.FetchTSClients();
-                instance.UpdateActiveChannels();
-            }
-        }
+        lock (instance.lockObject)
+            instance.OnServerConnectStatusChanged(serverConnectionHandlerID, (ConnectStatus)newStatus, errorNumber);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onNewChannelEvent")]
     public static void ts3plugin_onNewChannelEvent(ulong serverConnectionHandlerID, ulong channelID, ulong channelParentID)
     {
-        instance.OnNewChannel(serverConnectionHandlerID, channelID, channelParentID);
+        lock (instance.lockObject)
+            instance.OnNewChannel(serverConnectionHandlerID, channelID, channelParentID);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onNewChannelCreatedEvent")]
     public unsafe static void ts3plugin_onNewChannelCreatedEvent(ulong serverConnectionHandlerID, ulong channelID, ulong channelParentID, ushort invokerID, /*const */byte* invokerName, /*const */byte* invokerUniqueIdentifier)
     {
-        instance.OnNewChannelCreated(serverConnectionHandlerID, channelID, channelParentID, invokerID, invokerName, invokerUniqueIdentifier);
+        lock (instance.lockObject)
+            instance.OnNewChannelCreated(serverConnectionHandlerID, channelID, channelParentID, invokerID, invokerName, invokerUniqueIdentifier);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onDelChannelEvent")]
     public unsafe static void ts3plugin_onDelChannelEvent(ulong serverConnectionHandlerID, ulong channelID, ushort invokerID, /*const */byte* invokerName, /*const */byte* invokerUniqueIdentifier)
     {
-        instance.OnChannelDeleted(serverConnectionHandlerID, channelID, invokerID, invokerName, invokerUniqueIdentifier);
+        lock (instance.lockObject)
+            instance.OnChannelDeleted(serverConnectionHandlerID, channelID, invokerID, invokerName, invokerUniqueIdentifier);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onChannelMoveEvent")]
     public unsafe static void ts3plugin_onChannelMoveEvent(ulong serverConnectionHandlerID, ulong channelID, ulong newChannelParentID, ushort invokerID, /*const */byte* invokerName, /*const */byte* invokerUniqueIdentifier)
     {
-        instance.OnChannelMoved(serverConnectionHandlerID, channelID, newChannelParentID, invokerID, invokerName, invokerUniqueIdentifier);
+        lock (instance.lockObject)
+            instance.OnChannelMoved(serverConnectionHandlerID, channelID, newChannelParentID, invokerID, invokerName, invokerUniqueIdentifier);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onClientMoveEvent")]
@@ -2649,14 +2973,17 @@ public partial class Plugin
         ulong oldChannelID, ulong newChannelID, Visibility visibility, byte* moveMessage)
     {
         // Client moved themself
-        instance.HandleClientMoved(serverConnectionHandlerID, clientID, oldChannelID, newChannelID);
+
+        lock (instance.lockObject)
+            instance.HandleClientMoved(serverConnectionHandlerID, clientID, oldChannelID, newChannelID);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onClientMoveTimeoutEvent")]
     public unsafe static void ts3plugin_onClientMoveTimeoutEvent(ulong serverConnectionHandlerID, ushort clientID,
         ulong oldChannelID, ulong newChannelID, Visibility visibility, /*const */byte* timeoutMessage)
     {
-        instance.HandleClientMoved(serverConnectionHandlerID, clientID, oldChannelID, newChannelID);
+        lock (instance.lockObject)
+            instance.HandleClientMoved(serverConnectionHandlerID, clientID, oldChannelID, newChannelID);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onClientMoveMovedEvent")]
@@ -2665,7 +2992,9 @@ public partial class Plugin
         ushort moverID, /*const */byte* moverName, /*const */byte* moverUniqueIdentifier, /*const */byte* moveMessage)
     {
         // Client was moved by another
-        instance.HandleClientMoved(serverConnectionHandlerID, clientID, oldChannelID, newChannelID);
+
+        lock (instance.lockObject)
+            instance.HandleClientMoved(serverConnectionHandlerID, clientID, oldChannelID, newChannelID);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onClientKickFromChannelEvent")]
@@ -2673,7 +3002,8 @@ public partial class Plugin
         ulong oldChannelID, ulong newChannelID, Visibility visibility,
         ushort kickerID, /*const */byte* kickerName, /*const */byte* kickerUniqueIdentifier, /*const */byte* kickMessage)
     {
-        instance.HandleClientMoved(serverConnectionHandlerID, clientID, oldChannelID, newChannelID);
+        lock (instance.lockObject)
+            instance.HandleClientMoved(serverConnectionHandlerID, clientID, oldChannelID, newChannelID);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onClientKickFromServerEvent")]
@@ -2681,13 +3011,15 @@ public partial class Plugin
         ulong oldChannelID, ulong newChannelID, Visibility visibility,
         ushort kickerID, /*const */byte* kickerName, /*const */byte* kickerUniqueIdentifier, /*const */byte* kickMessage)
     {
-        instance.HandleClientMoved(serverConnectionHandlerID, clientID, oldChannelID, newChannelID);
+        lock (instance.lockObject)
+            instance.HandleClientMoved(serverConnectionHandlerID, clientID, oldChannelID, newChannelID);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onTalkStatusChangeEvent")]
     public static void ts3plugin_onTalkStatusChangeEvent(ulong serverConnectionHandlerID, int status, int isReceivedWhisper, ushort clientID)
     {
-        instance.OnTalkStatusChanged(serverConnectionHandlerID, clientID, (TalkStatus)status, isReceivedWhisper != 0);
+        lock (instance.lockObject)
+            instance.OnTalkStatusChanged(serverConnectionHandlerID, clientID, (TalkStatus)status, isReceivedWhisper != 0);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onCustom3dRolloffCalculationClientEvent")]
@@ -2696,6 +3028,7 @@ public partial class Plugin
         if (serverConnectionHandlerID != instance.currentServerId)
             return;
 
+        // Intentionally un-synchronized.
         instance.CalculateClientVolume(clientID, ref *volume);
     }
 
@@ -2712,14 +3045,20 @@ public partial class Plugin
         // Commands can get sent to yourself
         if (invokerClientID == instance.localClientId)
         {
-            instance.HandlePluginCommandEvent(nameUtf8, cmd, null);
+            lock (instance.lockObject)
+                instance.HandlePluginCommandEvent(nameUtf8, cmd, null);
+
             return;
         }
 
         if (!nameUtf8.SequenceEqual(DLLName))
             return;
 
-        var client = instance.GetClientByClientIdThreadSafe(invokerClientID);
+        Client? client;
+
+        lock (instance.lockObject)
+            client = instance.GetClientByClientId(invokerClientID);
+
         var invokerNameStr = Marshal.PtrToStringUTF8((nint)invokerName);
 
         if (client == null)
@@ -2732,7 +3071,10 @@ public partial class Plugin
         }
 
         if (cmd.Length != 0)
-            instance.HandlePluginCommandEvent(nameUtf8, cmd, client);
+        {
+            lock (instance.lockObject)
+                instance.HandlePluginCommandEvent(nameUtf8, cmd, client);
+        }
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onClientDisplayNameChanged")]
@@ -2745,52 +3087,62 @@ public partial class Plugin
             return;
 
         var name = Marshal.PtrToStringUTF8((IntPtr)displayName);
-        var client = instance.GetClientByClientIdThreadSafe(clientID);
 
-        if (client != null)
+        lock (instance.lockObject)
         {
-            client.ClientName = name;
-        }
-        else
-        {
-            //WriteConsole($"Unregistered client changed display name. ClientID: {clientID}");
+            var client = instance.GetClientByClientId(clientID);
+
+            if (client != null)
+            {
+                client.ClientName = name;
+            }
+            else
+            {
+                //WriteConsole($"Unregistered client changed display name. ClientID: {clientID}");
+            }
         }
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onUpdateChannelEditedEvent")]
     public unsafe static void ts3plugin_onUpdateChannelEditedEvent(ulong serverConnectionHandlerID, ulong channelID, ushort invokerID, /*const */byte* invokerName, /*const */byte* invokerUniqueIdentifier)
     {
-        instance.OnChannelEdited(serverConnectionHandlerID, channelID, invokerID, invokerName, invokerUniqueIdentifier);
+        lock (instance.lockObject)
+            instance.OnChannelEdited(serverConnectionHandlerID, channelID, invokerID, invokerName, invokerUniqueIdentifier);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onChannelSubscribeEvent")]
     public static void ts3plugin_onChannelSubscribeEvent(ulong serverConnectionHandlerID, ulong channelID)
     {
-        instance.OnChannelSubscribed(serverConnectionHandlerID, channelID);
+        lock (instance.lockObject)
+            instance.OnChannelSubscribed(serverConnectionHandlerID, channelID);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onChannelSubscribeFinishedEvent")]
     public static void ts3plugin_onChannelSubscribeFinishedEvent(ulong serverConnectionHandlerID)
     {
-        instance.OnChannelSubscribeFinished(serverConnectionHandlerID);
+        lock (instance.lockObject)
+            instance.OnChannelSubscribeFinished(serverConnectionHandlerID);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onChannelUnsubscribeEvent")]
     public static void ts3plugin_onChannelUnsubscribeEvent(ulong serverConnectionHandlerID, ulong channelID)
     {
-        instance.OnChannelUnsubscribed(serverConnectionHandlerID, channelID);
+        lock (instance.lockObject)
+            instance.OnChannelUnsubscribed(serverConnectionHandlerID, channelID);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onChannelUnsubscribeFinishedEvent")]
     public static void ts3plugin_onChannelUnsubscribeFinishedEvent(ulong serverConnectionHandlerID)
     {
-        instance.OnChannelUnsubscribeFinished(serverConnectionHandlerID);
+        lock (instance.lockObject)
+            instance.OnChannelUnsubscribeFinished(serverConnectionHandlerID);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "ts3plugin_onClientMoveSubscriptionEvent")]
     public static void ts3plugin_onClientMoveSubscriptionEvent(ulong serverConnectionHandlerID, ushort clientID, ulong oldChannelID, ulong newChannelID, Visibility visibility)
     {
-        instance.OnClientMoveSubscriptionEvent(serverConnectionHandlerID, clientID, oldChannelID, newChannelID, visibility);
+        lock (instance.lockObject)
+            instance.OnClientMoveSubscriptionEvent(serverConnectionHandlerID, clientID, oldChannelID, newChannelID, visibility);
     }
 #pragma warning restore IDE1006 // Naming Styles
     #endregion
