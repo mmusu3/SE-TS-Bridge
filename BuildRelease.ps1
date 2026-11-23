@@ -14,9 +14,18 @@ foreach ($plugin in @($sePlugin, $tsPlugin)) {
 	}
 }
 
-dotnet publish (Join-Path $PSScriptRoot 'Installer\Installer.csproj') -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o $InstallerOutput
-if ($LASTEXITCODE -ne 0) {
-	throw "Installer publish failed with exit code $LASTEXITCODE."
-}
+$publishDirectory = Join-Path $InstallerOutput ([guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $publishDirectory | Out-Null
 
-Compress-Archive -Path (Join-Path $InstallerOutput 'Installer.exe'), $sePlugin, $tsPlugin, (Join-Path $PSScriptRoot 'README.md') -DestinationPath $DestinationPath
+try {
+	dotnet publish (Join-Path $PSScriptRoot 'Installer\Installer.csproj') -c Release -o $publishDirectory
+	if ($LASTEXITCODE -ne 0) {
+		throw "Installer publish failed with exit code $LASTEXITCODE."
+	}
+
+	$installerFiles = @(Get-ChildItem -LiteralPath $publishDirectory | Where-Object { $_.Extension -ne '.pdb' } | ForEach-Object { $_.FullName })
+	Compress-Archive -LiteralPath ($installerFiles + @($sePlugin, $tsPlugin, (Join-Path $PSScriptRoot 'README.md'))) -DestinationPath $DestinationPath
+}
+finally {
+	Remove-Item -LiteralPath $publishDirectory -Recurse -Force
+}

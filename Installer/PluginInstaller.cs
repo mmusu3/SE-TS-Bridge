@@ -65,7 +65,7 @@ static class PluginInstaller
     {
         path = path.Trim();
 
-        if (path.Length == 0 || !Path.IsPathFullyQualified(path))
+        if (!IsFullyQualified(path))
             throw new ArgumentException($"Enter a full path for the {name} folder.");
 
         path = Path.GetFullPath(path);
@@ -75,9 +75,23 @@ static class PluginInstaller
 
         return path;
     }
+
+    static bool IsFullyQualified(string path)
+    {
+        if (path.Length < 2)
+            return false;
+
+        if (IsDirectorySeparator(path[0]))
+            return IsDirectorySeparator(path[1]) || path[1] == '?';
+
+        return path.Length >= 3 && path[1] == ':' && IsDirectorySeparator(path[2])
+            && ((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z'));
+    }
+
+    static bool IsDirectorySeparator(char character) => character == '\\' || character == '/';
 }
 
-sealed record InstallationPlan(string SpaceEngineersSource, string SpaceEngineersTarget, string TeamSpeakSource, string TeamSpeakTarget)
+sealed class InstallationPlan(string SpaceEngineersSource, string SpaceEngineersTarget, string TeamSpeakSource, string TeamSpeakTarget)
 {
     public void Install()
     {

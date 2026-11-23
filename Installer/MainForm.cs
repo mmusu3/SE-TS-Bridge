@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Runtime.InteropServices;
 using System.Security;
 
 namespace Installer;
@@ -31,15 +32,19 @@ public partial class MainForm : Form
 
     void BrowseForFolder(TextBox textBox, string description)
     {
-        using var dialog = new FolderBrowserDialog {
-            Description = description,
-            UseDescriptionForTitle = true,
-            ShowNewFolderButton = true,
-            SelectedPath = Directory.Exists(textBox.Text) ? textBox.Text : string.Empty
-        };
+        try
+        {
+            var path = FolderPicker.Show(Handle, description, textBox.Text);
 
-        if (dialog.ShowDialog(this) == DialogResult.OK)
-            textBox.Text = dialog.SelectedPath;
+            if (path != null)
+                textBox.Text = path;
+        }
+        catch (Exception ex) when (ex is COMException or IOException or UnauthorizedAccessException
+            or SecurityException or ArgumentException or NotSupportedException or InvalidOperationException)
+        {
+            MessageBox.Show(this, $"Unable to select a folder.\n\n{ex.Message}",
+                Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 
     void InstallButton_Click(object sender, EventArgs e)
